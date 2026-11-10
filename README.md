@@ -185,4 +185,5 @@ and browser tests only), PS4 saves, and moving a card between two consoles.
 ## Credits
 
 Garlic SaveMgr by earthonion and contributors. Upstream ships without a license
-file, which is one reason this repository is private.
+file; `src/main.c` and `src/CMP/` are their work, adapted here. three.js
+(`vendor/`) is MIT licensed.
