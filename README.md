@@ -125,8 +125,8 @@ still there; its page, cloud/FTP watcher and UI are not used.
   `/user/data/memcard/icon0.png` (it cannot see `/data`). Backup notifications use
   the same toast. If the system refuses a toast, a plain text notification is
   sent instead.
-- The page also works in the console's browser. That browser has no WebGL, so the
-  card icons are the flat drawing there.
+- The page also works in the console's browser. There the card icons show as the
+  flat drawing instead of the 3D model.
 
 ## The card icons
 
