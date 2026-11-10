@@ -5,7 +5,7 @@ const { chromium } = require('@playwright/test');
 const http = require('http'), fs = require('fs'), path = require('path');
 const ROOT = path.join(__dirname, '..');
 const out = process.argv[2] || path.join(ROOT, 'assets/icon0.png');
-const query = process.argv[3] || 'bold=1&text=PS5%20saves&style=italic%20500&family=Z003';
+const query = process.argv[3] || 'bold=1'; // blank label; add e.g. "&text=PS5&style=italic%20500&family=Z003" to write on it
 const files = { '/': ['tools/icon.html', 'text/html'], '/card3d.js': ['src/card3d.js', 'text/javascript'], '/three.module.min.js': ['vendor/three.module.min.js', 'text/javascript'] };
 const system = process.env.CHROMIUM_PATH || ['/usr/bin/chromium', '/usr/bin/chromium-browser'].find(p => fs.existsSync(p));
 
