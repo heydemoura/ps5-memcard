@@ -1,5 +1,6 @@
 // End-to-end: the real page + the real memcard core, running in the PC simulator
-// (tests/sim.c) against a throwaway fake console. Build first: make build/sim build/ui.html
+// (tests/sim.c) against a throwaway fake console.
+// Build first: make build/sim build/ui.html build/three.module.min.js.gz
 const { test, expect } = require('@playwright/test');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -15,7 +16,8 @@ async function startSim(args = []) {
   fs.rmdirSync(root);
   port++;
   base = `http://127.0.0.1:${port}`;
-  sim = spawn(path.join(ROOT, 'build/sim'), ['--port', String(port), '--ui', path.join(ROOT, 'build/ui.html'), '--root', root, ...args],
+  sim = spawn(path.join(ROOT, 'build/sim'), ['--port', String(port), '--ui', path.join(ROOT, 'build/ui.html'),
+    '--three', path.join(ROOT, 'build/three.module.min.js.gz'), '--root', root, ...args],
     { stdio: ['ignore', 'pipe', 'pipe'] });
   await new Promise((resolve, reject) => {
     sim.stdout.on('data', d => String(d).includes('simulator:') && resolve());
@@ -326,6 +328,95 @@ test('"every drive" in the settings turns a new drive into a card by itself', as
   await post('/sim/usb?n=2&on=1');
   await expect(page.locator('.slot[data-usb="2"]')).toContainText('7 saves', { timeout: 30000 });
   expect(fs.existsSync(cardOn(2, '10000000/PPSA02530/sdimg_RETURNAL0000'))).toBe(true);
+});
+
+// What an icon canvas currently shows: how many pixels are painted, and a checksum of them.
+const iconState = (page, usb) => page.evaluate(u => {
+  const cv = document.querySelector(`.slot[data-usb="${u}"] canvas.mc3d`);
+  if (!cv) return null;
+  const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+  let painted = 0, sum = 0;
+  for (let i = 0; i < d.length; i += 4) { if (d[i + 3] > 40) painted++; sum = (sum * 31 + d[i] + d[i + 1] * 3 + d[i + 3] * 7) >>> 0; }
+  return { painted, sum, area: cv.width * cv.height, dim: cv.classList.contains('dim') };
+}, usb);
+
+test('every memory card tile has a turning 3D card for an icon', async ({ page }) => {
+  await startSim();
+  await synced(7);
+  await post('/sim/usb?n=1&on=1');
+  await post('/api/mc/card_init?usb=1');
+  await cardsInUse(2);
+  await post('/sim/usb?n=2&on=1'); // a third drive that is not a card
+  await page.goto(base);
+  await page.waitForFunction(() => window.mcIcons3d === true);
+  await expect(page.locator('.slot canvas.mc3d')).toHaveCount(4); // all cards, usb0, usb1, and the idle drive
+  for (const usb of ['all', 0, 1]) {
+    await expect.poll(async () => (await iconState(page, usb)).painted, { timeout: 10000 }).toBeGreaterThan(300);
+    const a = await iconState(page, usb);
+    expect(a.painted).toBeLessThan(a.area); // a card on a clear background, not a filled box
+    await page.waitForTimeout(500);
+    expect((await iconState(page, usb)).sum).not.toBe(a.sum); // it turns
+  }
+  // the drive that is not a card: drawn, dimmed, standing still
+  await expect.poll(async () => (await iconState(page, 2)).painted, { timeout: 10000 }).toBeGreaterThan(300);
+  const idle = await iconState(page, 2);
+  expect(idle.dim).toBe(true);
+  await page.waitForTimeout(500);
+  expect((await iconState(page, 2)).sum).toBe(idle.sum);
+  // tiles are rebuilt on every status poll; the icons must survive that instead of restarting
+  await page.evaluate(() => { document.querySelector('.slot[data-usb="1"] canvas.mc3d').dataset.kept = 'yes'; });
+  await page.waitForTimeout(5000);
+  await expect(page.locator('.slot[data-usb="1"] canvas.mc3d')).toHaveAttribute('data-kept', 'yes');
+  expect(await page.evaluate(() => window.mcIcons.size)).toBe(4);
+  // the card's name is written on its label
+  page.once('dialog', d => d.accept('Travel card'));
+  await page.locator('.slot[data-usb="1"] .ren').click();
+  await expect.poll(() => page.evaluate(() => window.mcIcons.get(1).text)).toBe('Travel card');
+  // pulling a drive drops its icon
+  await post('/sim/usb?n=2&on=0');
+  await expect(page.locator('.slot canvas.mc3d')).toHaveCount(3, { timeout: 15000 });
+  expect(await page.evaluate(() => window.mcIcons.has(2))).toBe(false);
+  if (SHOTS) {
+    await page.evaluate(() => { [['all', -0.5], [0, -0.45], [1, 0.4]].forEach(([k, a]) => { const e = window.mcIcons.get(k); e.angle = a; e.dirty = true; }); });
+    await page.waitForTimeout(400);
+    await shot(page, 'icons-3d.png');
+    await page.locator('#slots').screenshot({ path: path.join(SHOTS, 'icons-3d-tiles.png') });
+  }
+});
+
+test('with reduced motion the card icons stand still', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await startSim();
+  await synced(7);
+  await page.goto(base);
+  await page.waitForFunction(() => window.mcIcons3d === true);
+  await expect.poll(async () => (await iconState(page, 0)).painted, { timeout: 10000 }).toBeGreaterThan(300);
+  const a = await iconState(page, 0);
+  await page.waitForTimeout(700);
+  expect((await iconState(page, 0)).sum).toBe(a.sum);
+});
+
+test('without three.js the tiles fall back to a flat card and the page still works', async ({ page }) => {
+  await page.route('**/three.module.min.js*', route => route.abort());
+  await startSim();
+  await synced(7);
+  await page.goto(base);
+  await expect(page.locator('.game')).toHaveCount(5);
+  expect(await page.evaluate(() => window.mcIcons3d)).toBeUndefined();
+  const flat = await iconState(page, 0);
+  expect(flat.painted).toBeGreaterThan(300);
+  await page.waitForTimeout(500);
+  expect((await iconState(page, 0)).sum).toBe(flat.sum);
+  await expect(page.locator('#sCard')).toHaveText('7');
+});
+
+test('three.js is served by the console itself, compressed', async () => {
+  await startSim();
+  const r = await fetch(base + '/three.module.min.js?v=160');
+  expect(r.status).toBe(200);
+  expect(r.headers.get('content-encoding')).toBe('gzip');
+  expect(r.headers.get('content-type')).toContain('javascript');
+  expect((await r.text()).startsWith('/**\n * @license\n * Copyright 2010-2023 Three.js Authors')).toBe(true);
 });
 
 test('phone layout', async ({ page }) => {

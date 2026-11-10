@@ -23,7 +23,7 @@ replaces the running copy.
 
 | Tab | What you get |
 | --- | --- |
-| **Drive tiles** | One per connected USB drive: its name, saves, free space. Click a card to work with that card only, **✎** to name it, **Use as card** to start using a drive that is not a card yet. |
+| **Drive tiles** | One per connected USB drive: its name, saves, free space, and a turning PS1-style memory card with the card's name on its label. Click a card to work with that card only, **✎** to name it, **Use as card** to start using a drive that is not a card yet. |
 | **On the card** | Every save on the selected card (or all cards), grouped by game, with the profile it came from. **Import** copies it into the profile you pick. **✕** deletes that copy. |
 | **On this console** | Every save on the console and whether it is on each card yet. **Back up** copies one now, **Back up game** / **Back up all** do the same in bulk, to the selected card or to all of them. |
 | **Status** | Counters, the running copy, an activity log, and the settings. |
@@ -98,6 +98,15 @@ Everything the page does, on port 8083:
 Garlic SaveMgr's own endpoints (`/api/saves`, `/api/log`, `/api/mount`, ...) are
 still there; its page, cloud/FTP watcher and UI are not used.
 
+## The card icons
+
+The memory card on each tile is a small three.js model built in code
+(`src/card3d.js`): no model file, the print and the label are painted on a canvas.
+One WebGL context draws all of them. three.js itself (`vendor/`, MIT) is gzipped
+into the payload and served from the console, so the page needs no internet. With
+WebGL or the script unavailable the tiles show a flat drawing instead, and with
+"reduce motion" set the cards stand still.
+
 ## Build
 
 Needs the [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) and a host
@@ -114,7 +123,7 @@ The memory card logic (`src/memcard.c`) is plain POSIX and runs on a PC.
 ```sh
 make test          # watcher / index / staging rules against a fake tree
 make sim           # the real page + the real core on http://127.0.0.1:8083/
-npm install && make build/sim build/ui.html && npx playwright test   # browser tests
+npm install && make build/sim build/ui.html build/three.module.min.js.gz && npx playwright test   # browser tests
 ```
 
 `make sim` fakes only the import step (that needs the console's save crypto).
@@ -124,8 +133,8 @@ npm install && make build/sim build/ui.html && npx playwright test   # browser t
 On a PS5 with one USB exFAT drive: drive detection (empty ports are ignored),
 automatic mirror (card copy byte-identical to the console save), previous-copy
 rotation, manual backup, import of a decrypted folder, import of a mirrored image
-(the installed save mounts and holds its files), delete, naming the card, and
-replacing a running instance.
+(the installed save mounts and holds its files), delete, naming the card,
+replacing a running instance, and the 3D icon with three.js served by the console.
 
 Not yet exercised on hardware: two drives plugged in at once (covered by the host
 and browser tests only), PS4 saves, and moving a card between two consoles.
@@ -133,7 +142,8 @@ and browser tests only), PS4 saves, and moving a card between two consoles.
 ## Layout of the source
 
 - `src/memcard.c`, `src/memcard.h`: the memory card (watcher, index, staging, `/api/mc/*`).
-- `src/ui.html`: the page, embedded into the payload at build time.
+- `src/ui.html`, `src/card3d.js`: the page and its 3D card icons, embedded into the payload at build time.
+- `vendor/`: three.js r160 (MIT), served by the payload.
 - `src/main.c`, `src/CMP/`: Garlic SaveMgr, with the glue marked `memcard glue`.
 - `tests/`: host test, simulator, browser tests.
 

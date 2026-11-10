@@ -4620,6 +4620,33 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
  extern const unsigned char src_ui_html[], src_ui_html_end[];
  #define src_ui_html_len ((int)(src_ui_html_end - src_ui_html))
 
+ /* three.js for the memory card icons, gzipped at build time. */
+ #ifndef THREE_GZ_PATH
+ #define THREE_GZ_PATH "build/three.module.min.js.gz"
+ #endif
+ __asm__(".pushsection .rodata\n"
+         ".global src_three_gz\n"
+         "src_three_gz:\n"
+         ".incbin \"" THREE_GZ_PATH "\"\n"
+         ".global src_three_gz_end\n"
+         "src_three_gz_end:\n"
+         ".popsection\n");
+ extern const unsigned char src_three_gz[], src_three_gz_end[];
+
+ static void memcard_send_three(int sock) {
+     char hdr[512];
+     size_t len = (size_t)(src_three_gz_end - src_three_gz);
+     int hlen = snprintf(hdr, sizeof(hdr),
+         "HTTP/1.1 200 OK\r\n"
+         "Content-Type: text/javascript\r\n"
+         "Content-Encoding: gzip\r\n"
+         "Content-Length: %zu\r\n"
+         "Cache-Control: public, max-age=31536000, immutable\r\n"
+         "Access-Control-Allow-Origin: *\r\n"
+         "Connection: close\r\n\r\n", len);
+     if (send_all_fd(sock, hdr, (size_t)hlen) == 0) send_all_fd(sock, src_three_gz, len);
+ }
+
  /* ── memcard glue: PS5 side of mc_env_t ─────────────────────────── */
  static int mc_cb_is_mounted(const char *path) {
      /* A bare /mnt/usbN directory lives on the system partition; only a real
@@ -4932,6 +4959,13 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
      }
      if (strcmp(method, "GET") == 0 && (strcmp(url, "/") == 0 || strcmp(url, "/index.html") == 0)) {
          http_send(sock, "200 OK", "text/html", (const char *)src_ui_html, src_ui_html_len);
+         close(sock);
+         return NULL;
+     }
+     /* memcard glue: three.js for the page, no lock needed */
+     if (strcmp(method, "GET") == 0 && strncmp(url, "/three.module.min.js", 20) == 0 &&
+         (url[20] == 0 || url[20] == '?')) {
+         memcard_send_three(sock);
          close(sock);
          return NULL;
      }

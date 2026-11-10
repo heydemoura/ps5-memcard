@@ -64,15 +64,18 @@ input[type=text],input[type=number],select{width:100%;font-family:var(--mono);fo
 input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(57,255,159,.15)}
 select option{background:#0b0e15}
 
-.slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;margin-bottom:14px}
-.slot{position:relative;text-align:left;font-family:var(--mono);color:var(--txt);background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:12px;padding:11px 34px 11px 13px;transition:.15s;min-width:0}
+.slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(222px,1fr));gap:8px;margin-bottom:14px}
+.slot{position:relative;display:flex;gap:10px;align-items:center;text-align:left;font-family:var(--mono);color:var(--txt);background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:12px;padding:8px 30px 8px 9px;transition:.15s;min-width:0}
+.slot .st{min-width:0;flex:1}
+.slot canvas.mc3d{flex:0 0 52px;width:52px;height:68px;pointer-events:none}
+.slot canvas.dim{opacity:.4;filter:grayscale(1)}
 button.slot,.slot[role=button]{cursor:pointer}
 .slot b{display:block;font-size:13px;font-weight:800;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .slot small{display:block;margin-top:3px;font-size:10px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .slot.on{border-color:var(--acc);box-shadow:0 0 18px rgba(57,255,159,.15)} .slot.on b{color:var(--acc)}
 .slot:focus-visible{outline:2px solid var(--acc3);outline-offset:2px}
-.slot.idle{border-style:dashed;padding-right:13px} .slot.idle b{color:var(--mut)}
-.slot.idle .btn{margin-top:8px;width:100%}
+.slot.idle{border-style:dashed;padding-right:9px;flex-wrap:wrap} .slot.idle b{color:var(--mut)}
+.slot.idle .btn{flex:1 0 100%}
 .slot .ren{position:absolute;top:7px;right:7px;width:24px;height:24px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--mut);font-size:13px;cursor:pointer}
 .slot .ren:hover{color:var(--acc3);border-color:var(--line)}
 .tabs{display:flex;gap:6px;margin-bottom:14px}
@@ -250,6 +253,25 @@ let tab=localStorage.mcTab==='console'?'console':'card', status=null, cardSaves=
 let sel=localStorage.mcSel==null||localStorage.mcSel===''?-1:+localStorage.mcSel; // card filter: -1 = every card
 let lastSeen='', lastListLoad=0, settingsDirty=false, dlg=null, loadingLists=false;
 
+/* Memory card icons. Each keeps one canvas for as long as its drive is around; the
+ * three.js module below spins a 3D card into it. Until that is running (or if WebGL
+ * is not available) the canvas shows a flat drawing of the card. */
+window.mcIcons=new Map();
+function icon(key,text,mode){
+  let e=mcIcons.get(key);
+  if(!e){const cv=el('canvas','mc3d'),k=Math.max(2,Math.min(3,window.devicePixelRatio||1));cv.width=Math.round(52*k);cv.height=Math.round(68*k);cv.setAttribute('aria-hidden','true');
+    e={canvas:cv,phase:(typeof key==='number'?key:4.5)*0.9};mcIcons.set(key,e)}
+  if(e.text!==text||e.mode!==mode){e.text=text;e.mode=mode;e.dirty=true;if(!window.mcIcons3d)flatIcon(e)}
+  e.canvas.classList.toggle('dim',mode==='idle');
+  return e.canvas}
+function flatIcon(e){
+  const cv=e.canvas,c=cv.getContext('2d'),w=cv.width,h=cv.height,x=w*.16,y=h*.07,cw=w*.68,ch=h*.86,r=cw*.2;
+  c.clearRect(0,0,w,h);c.fillStyle='#a2a2a6';
+  c.beginPath();c.moveTo(x+3,y);c.lineTo(x+cw-3,y);c.lineTo(x+cw,y+3);c.lineTo(x+cw,y+ch-r);c.quadraticCurveTo(x+cw,y+ch,x+cw-r,y+ch);
+  c.lineTo(x+r,y+ch);c.quadraticCurveTo(x,y+ch,x,y+ch-r);c.lineTo(x,y+3);c.closePath();c.fill();
+  c.fillStyle='#26262a';c.fillRect(x+cw*.2,y+ch*.3,cw*.6,ch*.035);c.fillRect(x+cw*.14,y+ch*.38,cw*.72,ch*.03);
+  c.fillStyle='rgba(0,0,0,.14)';c.fillRect(x+cw*.09,y+ch*.48,cw*.82,ch*.34)}
+
 const fmt=n=>n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB';
 const when=t=>t?new Date(t*1000).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}):'–';
 const ago=s=>s<2?'just now':s<90?Math.round(s)+' s ago':s<5400?Math.round(s/60)+' min ago':Math.round(s/3600)+' h ago';
@@ -305,15 +327,16 @@ function renderStatus(s){
 
 /* One tile per connected drive: pick a card, name it, or start using a drive as a card. */
 function renderSlots(){
-  const box=$('slots'), ds=drives(), cs=cards(); box.replaceChildren(); box.hidden=!ds.length;
+  const box=$('slots'), ds=drives(), cs=cards(), live=new Set(); box.replaceChildren(); box.hidden=!ds.length;
+  const tile=(t,key,text,mode,...lines)=>{live.add(key);const st=el('div','st');st.append(...lines);t.append(icon(key,text,mode),st)};
   if(cs.length>1){const all=el('button','slot'+(sel<0?' on':''));all.dataset.usb='all';
-    all.append(el('b',null,'All cards'),el('small',null,`${cs.length} cards · ${cs.reduce((n,c)=>n+c.saves,0)} copies`));
+    tile(all,'all','','all',el('b',null,'All cards'),el('small',null,`${cs.length} cards · ${cs.reduce((n,c)=>n+c.saves,0)} copies`));
     all.onclick=()=>pick(-1);box.append(all)}
   for(const d of ds){
     if(d.card){
       const t=el('div','slot'+(sel===d.usb||cs.length===1?' on':''));t.dataset.usb=d.usb;t.tabIndex=0;t.setAttribute('role','button');
       const state=d.waiting?`${d.waiting} waiting`:'in sync';
-      t.append(el('b',null,d.label||'USB '+d.usb),el('small',null,`usb${d.usb} · ${d.saves} save${d.saves===1?'':'s'} · ${state}`),el('small',null,`${fmt(d.free)} free of ${fmt(d.total)}`));
+      tile(t,d.usb,d.label||'USB '+d.usb,'card',el('b',null,d.label||'USB '+d.usb),el('small',null,`usb${d.usb} · ${d.saves} save${d.saves===1?'':'s'} · ${state}`),el('small',null,`${fmt(d.free)} free of ${fmt(d.total)}`));
       const ren=el('button','ren','✎');ren.title='Name this card';
       ren.onclick=async e=>{e.stopPropagation();
         const name=prompt('Name for the card on usb'+d.usb+' (kept on the card itself)',d.label||'');if(name==null)return;
@@ -323,11 +346,12 @@ function renderSlots(){
       box.append(t)}
     else{
       const t=el('div','slot idle');t.dataset.usb=d.usb;
-      t.append(el('b',null,'USB '+d.usb),el('small',null,'not a memory card'),el('small',null,`${fmt(d.free)} free of ${fmt(d.total)}`));
+      tile(t,d.usb,'','idle',el('b',null,'USB '+d.usb),el('small',null,'not a memory card'),el('small',null,`${fmt(d.free)} free of ${fmt(d.total)}`));
       const use=el('button','btn sec sm','USE AS CARD');
       use.onclick=async()=>{use.disabled=true;
         try{await post('/api/mc/card_init?usb='+d.usb);note('usb'+d.usb+' is now a memory card','p');await poll(true)}catch(err){note(err.message,'e');use.disabled=false}};
       t.append(use);box.append(t)}}
+  for(const [k,e] of [...mcIcons])if(!live.has(k)&&!e.canvas.isConnected)mcIcons.delete(k);
 }
 function pick(u){sel=u;localStorage.mcSel=u<0?'':u;if(status)renderStatus(status);renderList()}
 
@@ -477,6 +501,9 @@ async function poll(force){
     $('cardpill').classList.add('off');$('cardpill').replaceChildren('console ',el('b',null,'offline'))}}}
 const refreshAll=()=>poll(true);
 (async function loop(){await poll();setTimeout(loop,document.hidden?6000:2000)})();
+</script>
+<script type="module">
+/*__CARD3D__*/
 </script>
 </body>
 </html>

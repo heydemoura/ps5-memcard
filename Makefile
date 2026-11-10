@@ -1,5 +1,5 @@
 PS5_PAYLOAD_SDK ?= /opt/ps5-payload-sdk
-VERSION ?= 0.2.0
+VERSION ?= 0.3.0
 
 PS5_CC := $(PS5_PAYLOAD_SDK)/bin/prospero-clang
 PS5_INCDIR := $(PS5_PAYLOAD_SDK)/target/include
@@ -18,10 +18,17 @@ all: ps5-memcard.elf
 
 .DELETE_ON_ERROR:
 
-# The page is embedded with .incbin (see main.c), so no xxd is needed.
-build/ui.html: src/ui.html Makefile
+# The page and three.js are embedded with .incbin (see main.c), so no xxd is needed.
+# The 3D icon code is kept in its own file and inlined into the page here.
+build/ui.html: src/ui.html src/card3d.js Makefile
 	@mkdir -p build
-	sed 's/__VERSION__/v$(VERSION)/g' $< > $@
+	sed -e 's/__VERSION__/v$(VERSION)/g' -e '/__CARD3D__/{r src/card3d.js' -e 'd' -e '}' $< > $@
+
+# three.js is served by the payload itself (the page must work without internet),
+# gzipped to keep the ELF small.
+build/three.module.min.js.gz: vendor/three.module.min.js
+	@mkdir -p build
+	gzip -9 -n -c $< > $@
 
 src/sqlite3.o: src/sqlite3.c
 	$(PS5_CC) -O2 -D_BSD_SOURCE -std=gnu11 -I$(PS5_INCDIR) $(SQLITE_FLAGS) -c -o $@ $<
@@ -29,7 +36,7 @@ src/sqlite3.o: src/sqlite3.c
 src/miniz_tinfl.o: src/miniz_tinfl.c src/miniz_tinfl.h src/miniz_common.h
 	$(PS5_CC) -O2 -D_BSD_SOURCE -std=gnu11 -Isrc -I$(PS5_INCDIR) -w -c -o $@ $<
 
-ps5-memcard.elf: src/main.c src/memcard.c src/memcard.h build/ui.html src/sqlite3.o src/miniz_tinfl.o $(CMP_SRCS) $(wildcard src/CMP/*.h) $(wildcard src/CMP/internal/*.h)
+ps5-memcard.elf: src/main.c src/memcard.c src/memcard.h build/ui.html build/three.module.min.js.gz src/sqlite3.o src/miniz_tinfl.o $(CMP_SRCS) $(wildcard src/CMP/*.h) $(wildcard src/CMP/internal/*.h)
 	$(PS5_CC) $(CFLAGS) -DGARLIC_VERSION='"$(VERSION)"' -DUI_HTML_PATH='"build/ui.html"' $(LDFLAGS) \
 		-o $@ src/main.c src/memcard.c $(CMP_SRCS) src/sqlite3.o src/miniz_tinfl.o $(LIBS)
 
@@ -46,7 +53,7 @@ test: build/memcard_test
 	build/memcard_test
 
 # The real page and the real memcard core against a fake console in /tmp.
-sim: build/sim build/ui.html
+sim: build/sim build/ui.html build/three.module.min.js.gz
 	build/sim --port $(SIM_PORT) --ui build/ui.html
 
 clean:

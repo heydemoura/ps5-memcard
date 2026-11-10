@@ -2,7 +2,7 @@
  * tree, so the whole thing can be driven from a browser without a PS5.
  *
  *   make sim            -> http://127.0.0.1:8083/
- *   build/sim --port N --ui build/ui.html [--root DIR] [--no-usb] [--empty]
+ *   build/sim --port N --ui build/ui.html [--three build/three.module.min.js.gz] [--root DIR] [--no-usb] [--empty]
  *
  * Only the import is faked (the real one needs the console's save crypto): it
  * stages the card save exactly like the payload does, then drops the staged
@@ -28,7 +28,7 @@
 #include <time.h>
 #include <unistd.h>
 
-static char g_root[512], g_ui[512] = "build/ui.html";
+static char g_root[512], g_ui[512] = "build/ui.html", g_three[512] = "build/three.module.min.js.gz";
 static int g_mounted[MC_MAX_USB];
 static char g_running[32];
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -279,6 +279,30 @@ static void *client(void *arg) {
             reply(fd, "200 OK", "text/html", page, (size_t)len);
             free(page);
         }
+    } else if (!strcmp(method, "GET") && !strncmp(url, "/three.module.min.js", 20)) {
+        FILE *f = fopen(g_three, "rb");
+        if (!f) {
+            reply(fd, "404 Not Found", "text/plain", "three.js missing", 16);
+        } else {
+            static char gz[1 << 20];
+            static pthread_mutex_t one = PTHREAD_MUTEX_INITIALIZER;
+            pthread_mutex_lock(&one);
+            size_t len = fread(gz, 1, sizeof(gz), f);
+            fclose(f);
+            char head[256];
+            int hn = snprintf(head, sizeof(head),
+                              "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Encoding: gzip\r\n"
+                              "Content-Length: %zu\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n", len);
+            if (write(fd, head, (size_t)hn) > 0) {
+                size_t off = 0;
+                while (off < len) {
+                    ssize_t w = write(fd, gz + off, len - off);
+                    if (w <= 0) break;
+                    off += (size_t)w;
+                }
+            }
+            pthread_mutex_unlock(&one);
+        }
     } else if (!strncmp(url, "/api/mc/icon", 12)) {
         char title[64], path[1024];
         mc_url_param(url, "title", title, sizeof(title));
@@ -334,6 +358,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--ui") && i + 1 < argc) snprintf(g_ui, sizeof(g_ui), "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--three") && i + 1 < argc) snprintf(g_three, sizeof(g_three), "%s", argv[++i]);
         else if (!strcmp(argv[i], "--root") && i + 1 < argc) snprintf(g_root, sizeof(g_root), "%s", argv[++i]);
         else if (!strcmp(argv[i], "--no-usb")) usb = 0;
         else if (!strcmp(argv[i], "--empty")) empty = 1;
