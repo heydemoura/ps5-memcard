@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MEM//CARD — PS5 saves on a USB memory card</title>
+<meta name="theme-color" content="#05060a">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='2' y='2' width='12' height='12' rx='3' fill='%2339ff9f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#05060a; --panel:rgba(14,17,26,.72); --line:rgba(120,255,190,.14);
+  --txt:#e6edf3; --mut:#7d8796; --acc:#39ff9f; --acc2:#7c5cff; --acc3:#00d4ff; --err:#ff4d6d; --warn:#ffd166;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace; --sans:'Space Grotesk',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+html,body{min-height:100%}
+body{background:var(--bg);color:var(--txt);font-family:var(--sans);overflow-x:hidden}
+body::before{content:"";position:fixed;inset:0;z-index:-2;
+  background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:44px 44px;mask-image:radial-gradient(ellipse at 50% 30%,#000 30%,transparent 75%)}
+body::after{content:"";position:fixed;inset:-20%;z-index:-1;pointer-events:none;
+  background:radial-gradient(circle at 20% 15%,rgba(124,92,255,.28),transparent 40%),
+             radial-gradient(circle at 85% 25%,rgba(57,255,159,.18),transparent 38%),
+             radial-gradient(circle at 50% 100%,rgba(0,212,255,.15),transparent 45%);
+  animation:drift 18s ease-in-out infinite alternate}
+@keyframes drift{to{transform:translate(3%,-2%) scale(1.05)}}
+.scan{position:fixed;inset:0;pointer-events:none;z-index:50;
+  background:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px)}
+
+nav{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:20px 28px;max-width:1180px;margin:auto;font-family:var(--mono);font-size:13px}
+.logo{display:flex;gap:10px;align-items:center;font-weight:800;letter-spacing:.08em}
+.logo i{width:12px;height:12px;border-radius:3px;background:var(--acc);box-shadow:0 0 14px var(--acc)}
+.pill{border:1px solid var(--line);border-radius:999px;padding:6px 12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill b{color:var(--acc)} .pill.off b{color:var(--err)}
+
+header{text-align:center;padding:34px 20px 22px;max-width:900px;margin:auto}
+.tag{display:inline-block;font-family:var(--mono);font-size:12px;letter-spacing:.2em;color:var(--acc);
+  border:1px solid rgba(57,255,159,.35);background:rgba(57,255,159,.06);padding:6px 14px;border-radius:999px;margin-bottom:20px}
+h1{font-size:clamp(34px,6.4vw,68px);line-height:.98;letter-spacing:-.03em;font-weight:700}
+h1 .grad{background:linear-gradient(90deg,var(--acc),var(--acc3) 50%,var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 0 22px rgba(57,255,159,.25))}
+.cursor{display:inline-block;width:.5em;height:.82em;background:var(--acc);vertical-align:-.06em;margin-left:6px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.sub{margin-top:16px;color:var(--mut);font-size:16px;line-height:1.5}
+.sub code{font-family:var(--mono);color:var(--txt);background:rgba(255,255,255,.06);padding:2px 6px;border-radius:5px}
+
+main{max-width:1180px;margin:0 auto;padding:10px 20px 50px;display:grid;grid-template-columns:1.25fr .75fr;gap:20px;align-items:start}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px;backdrop-filter:blur(14px);min-width:0}
+.card::before{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;pointer-events:none;
+  background:linear-gradient(135deg,rgba(57,255,159,.55),transparent 35%,transparent 65%,rgba(124,92,255,.55));
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+.ct{font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--mut);margin-bottom:18px;display:flex;justify-content:space-between;align-items:center}
+.ct span:first-child::before{content:"// ";color:var(--acc)}
+.dots{display:flex;gap:6px} .dots i{width:10px;height:10px;border-radius:50%;background:#333}
+.dots i:nth-child(1){background:#ff5f57}.dots i:nth-child(2){background:#febc2e}.dots i:nth-child(3){background:#28c840}
+
+label{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.15em;color:var(--mut);margin-bottom:7px}
+input[type=text],input[type=number],select{width:100%;font-family:var(--mono);font-size:15px;color:var(--txt);background:rgba(0,0,0,.45);
+  border:1px solid var(--line);border-radius:10px;padding:11px 13px;outline:none;transition:.15s}
+input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(57,255,159,.15)}
+select option{background:#0b0e15}
+
+.tabs{display:flex;gap:6px;margin-bottom:14px}
+.tabs button{flex:1;font-family:var(--mono);font-size:12px;letter-spacing:.12em;color:var(--mut);background:transparent;border:1px solid var(--line);border-radius:10px;padding:10px 8px;cursor:pointer}
+.tabs button.on{color:var(--acc);border-color:var(--acc);background:rgba(57,255,159,.07)}
+.tabs button b{font-weight:600;opacity:.8}
+.tools{display:flex;gap:10px;margin-bottom:14px}
+.tools input{flex:1;min-width:0}
+
+.btn{font-family:var(--mono);font-weight:800;font-size:13px;letter-spacing:.1em;border:0;border-radius:12px;padding:12px 16px;cursor:pointer;transition:.15s;white-space:nowrap}
+.btn.pri{color:#03130b;background:linear-gradient(90deg,var(--acc),var(--acc3));box-shadow:0 0 28px rgba(57,255,159,.35)}
+.btn.pri:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 0 40px rgba(57,255,159,.55)}
+.btn.sec{color:var(--txt);background:rgba(255,255,255,.05);border:1px solid var(--line)}
+.btn.sec:hover:not(:disabled){border-color:var(--acc3);color:var(--acc3)}
+.btn.sm{font-size:11px;padding:8px 11px;border-radius:9px}
+.btn.danger:hover:not(:disabled){border-color:var(--err);color:var(--err)}
+.btn.arm{border-color:var(--err);color:var(--err)}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+
+.list{display:flex;flex-direction:column;gap:12px;max-height:640px;overflow:auto;padding-right:4px}
+.list::-webkit-scrollbar,.term::-webkit-scrollbar{width:8px}
+.list::-webkit-scrollbar-thumb,.term::-webkit-scrollbar-thumb{background:rgba(120,255,190,.18);border-radius:8px}
+.game{flex:0 0 auto;border:1px solid var(--line);border-radius:14px;background:rgba(0,0,0,.28);overflow:hidden}
+.ghead{display:flex;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line)}
+.gicon{flex:0 0 44px;width:44px;height:44px;border-radius:10px;background:rgba(57,255,159,.08);border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;color:var(--acc);overflow:hidden}
+.gicon img{width:100%;height:100%;object-fit:cover;display:block}
+.gname{min-width:0;flex:1}
+.gname b{display:block;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gname small{font-family:var(--mono);font-size:11px;color:var(--mut);letter-spacing:.08em}
+.srow{display:flex;gap:12px;align-items:center;padding:11px 14px;border-top:1px solid rgba(120,255,190,.07)}
+.srow:first-of-type{border-top:0}
+.sinfo{min-width:0;flex:1}
+.sinfo b{display:block;font-family:var(--mono);font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sinfo small{display:block;margin-top:3px;font-family:var(--mono);font-size:11px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sinfo small em{font-style:normal;color:var(--acc3)}
+.sact{display:flex;gap:6px;align-items:center;flex:0 0 auto}
+.chip{font-family:var(--mono);font-size:10px;letter-spacing:.1em;border-radius:999px;padding:4px 9px;border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+.chip.ok{color:var(--acc);border-color:rgba(57,255,159,.4);background:rgba(57,255,159,.06)}
+.chip.wait{color:var(--warn);border-color:rgba(255,209,102,.4);background:rgba(255,209,102,.06)}
+.chip.newer{color:#b7a4ff;border-color:rgba(124,92,255,.5);background:rgba(124,92,255,.08)}
+@media(max-width:560px){.srow{flex-wrap:wrap}.sact{width:100%;justify-content:flex-end}}
+.empty{border:1.5px dashed rgba(57,255,159,.35);border-radius:14px;padding:34px 18px;text-align:center;background:rgba(57,255,159,.03);color:var(--mut);line-height:1.6}
+.empty .ico{font-family:var(--mono);font-size:26px;color:var(--acc);margin-bottom:8px}
+.empty b{color:var(--txt)}
+
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.stat{border:1px solid var(--line);border-radius:12px;padding:12px 6px;text-align:center}
+.stat b{display:block;font-family:var(--mono);font-size:22px;color:var(--acc)}
+.stat small{color:var(--mut);font-size:10px;letter-spacing:.12em;font-family:var(--mono)}
+.watch{margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--mut);line-height:1.6;display:flex;gap:9px;align-items:flex-start}
+.watch i{flex:0 0 9px;width:9px;height:9px;border-radius:50%;margin-top:5px;background:#444}
+.watch.on i{background:var(--acc);box-shadow:0 0 10px var(--acc);animation:pulse 2s ease-in-out infinite}
+.watch.off i{background:var(--err)}
+.watch b{color:var(--txt);font-weight:600}
+@keyframes pulse{50%{opacity:.35}}
+.bar{height:6px;border-radius:99px;background:rgba(255,255,255,.06);margin-top:14px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc2),var(--acc));box-shadow:0 0 12px var(--acc);transition:width .3s}
+.job{margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--mut);min-height:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.term{margin-top:14px;font-family:var(--mono);font-size:12px;line-height:1.65;background:#020304;border:1px solid var(--line);border-radius:12px;
+  padding:12px;height:250px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.term .p{color:var(--acc)} .term .m{color:var(--mut)} .term .e{color:var(--err)} .term .o{color:var(--acc3)} .term .w{color:var(--warn)}
+
+.set{margin-top:18px;border-top:1px solid var(--line);padding-top:16px}
+.set summary{font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--mut);cursor:pointer;list-style:none}
+.set summary::before{content:"// ";color:var(--acc)}
+.set summary::after{content:" +";color:var(--acc)} .set[open] summary::after{content:" −"}
+.sgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.opts{display:flex;flex-direction:column;gap:10px;margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--mut)}
+.opts label{display:flex;gap:8px;align-items:center;margin:0;letter-spacing:.04em;cursor:pointer;font-size:12px}
+.set .btn{margin-top:14px;width:100%}
+.note{margin-top:16px;padding:12px 14px;border-radius:12px;border:1px solid rgba(124,92,255,.35);background:rgba(124,92,255,.06);color:var(--mut);font-size:13px;line-height:1.5}
+.note b{color:var(--txt)} .note code{font-family:var(--mono);font-size:12px;color:var(--txt)}
+.note.bad{border-color:rgba(255,77,109,.45);background:rgba(255,77,109,.07);color:#ffb3c0}
+footer{text-align:center;color:var(--mut);font-family:var(--mono);font-size:12px;padding:0 20px 40px}
+
+.veil{position:fixed;inset:0;z-index:40;background:rgba(2,3,5,.72);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;padding:18px}
+.veil.show{display:flex}
+.dlg{width:100%;max-width:480px;max-height:92vh;overflow:auto}
+.dlg h2{font-size:22px;letter-spacing:-.01em;margin-bottom:4px;word-break:break-word}
+.dlg p.meta{font-family:var(--mono);font-size:12px;color:var(--mut);margin-bottom:16px;word-break:break-all}
+.users{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.users button{text-align:left;font-family:var(--mono);font-size:13px;color:var(--txt);background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;transition:.15s;overflow:hidden;text-overflow:ellipsis}
+.users button small{display:block;color:var(--mut);font-size:10px;margin-top:3px}
+.users button.on{border-color:var(--acc);color:var(--acc);box-shadow:0 0 18px rgba(57,255,159,.15)}
+.actions{display:flex;gap:12px;margin-top:18px}
+.actions .btn{flex:1;padding:14px}
+.actions .btn.sec{flex:0 0 auto}
+</style>
+</head>
+<body>
+<div class="scan"></div>
+<nav>
+  <div class="logo"><i></i>MEM//CARD</div>
+  <div class="pill off" id="cardpill">card <b>looking…</b></div>
+</nav>
+
+<header>
+  <div class="tag">◆ PS5 SAVE MIRROR · USB /memcard</div>
+  <h1>Saves on a <span class="grad">memory card</span><span class="cursor"></span></h1>
+  <p class="sub">Every save on this console is copied to <code>/memcard</code> on your USB drive while you play. Pull any of them back into any profile.</p>
+</header>
+
+<main>
+  <section class="card">
+    <div class="ct"><span>SAVES</span><span>01</span></div>
+    <div class="tabs">
+      <button data-tab="card" class="on">ON THE CARD <b id="nCard"></b></button>
+      <button data-tab="console">ON THIS CONSOLE <b id="nConsole"></b></button>
+    </div>
+    <div class="tools">
+      <input type="text" id="q" placeholder="filter by game, save or profile" autocomplete="off" spellcheck="false">
+      <button class="btn pri" id="backupAll" hidden>BACK UP ALL ▸</button>
+    </div>
+    <div class="list" id="list"></div>
+  </section>
+
+  <section class="card">
+    <div class="ct"><span>STATUS</span><div class="dots"><i></i><i></i><i></i></div></div>
+    <div class="stats">
+      <div class="stat"><b id="sCard">–</b><small>ON CARD</small></div>
+      <div class="stat"><b id="sSync">–</b><small>IN SYNC</small></div>
+      <div class="stat"><b id="sWait">–</b><small>WAITING</small></div>
+    </div>
+    <div class="watch" id="watch"><i></i><span id="watchText">connecting to the console…</span></div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="job" id="job"></div>
+    <div class="term" id="term"></div>
+
+    <details class="set" id="set">
+      <summary>SETTINGS</summary>
+      <div class="opts">
+        <label><input type="checkbox" id="cEnabled"> back up automatically</label>
+        <label><input type="checkbox" id="cPrev"> keep the previous copy of each save</label>
+        <label><input type="checkbox" id="cNotify"> show a console notification after a backup</label>
+        <label><input type="checkbox" id="cSys"> also copy the system's own backup images (sce_bu)</label>
+      </div>
+      <div class="sgrid">
+        <div><label for="cPoll">CHECK EVERY (s)</label><input type="number" id="cPoll" min="2" max="600"></div>
+        <div><label for="cSettle">QUIET TIME (s)</label><input type="number" id="cSettle" min="0" max="600"></div>
+        <div><label for="cMin">IN-GAME GAP (s)</label><input type="number" id="cMin" min="0" max="86400"></div>
+        <div><label for="cUsb">USB DRIVE</label><select id="cUsb"></select></div>
+      </div>
+      <button class="btn sec" id="saveSet">SAVE SETTINGS</button>
+      <div class="note"><b>Quiet time</b> is how long a save must sit unchanged before it is copied. <b>In-game gap</b> limits how often the same save is copied while its game is running; when the game closes it is copied right away.</div>
+    </details>
+  </section>
+</main>
+<footer>ps5-memcard <span id="ver">__VERSION__</span> · save handling by Garlic SaveMgr (earthonion)</footer>
+
+<div class="veil" id="veil">
+  <div class="card dlg">
+    <div class="ct"><span>IMPORT TO PROFILE</span><span>02</span></div>
+    <h2 id="dTitle"></h2>
+    <p class="meta" id="dMeta"></p>
+    <label>PROFILE ON THIS CONSOLE</label>
+    <div class="users" id="dUsers"></div>
+    <div class="opts" id="dPrevBox" hidden><label><input type="checkbox" id="dPrev"> use the previous copy instead of the latest</label></div>
+    <div class="note bad" id="dWarn" hidden></div>
+    <div class="note bad" id="dErr" hidden></div>
+    <div class="actions">
+      <button class="btn sec" id="dCancel">CANCEL</button>
+      <button class="btn pri" id="dGo" disabled>IMPORT ▸</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const el=(tag,cls,txt)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e};
+let tab=localStorage.mcTab==='console'?'console':'card', status=null, cardSaves=[], consoleSaves=[], cardPresent=false;
+let lastSeen='', lastListLoad=0, settingsDirty=false, dlg=null, loadingLists=false;
+
+const fmt=n=>n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB';
+const when=t=>t?new Date(t*1000).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}):'–';
+const ago=s=>s<2?'just now':s<90?Math.round(s)+' s ago':s<5400?Math.round(s/60)+' min ago':Math.round(s/3600)+' h ago';
+
+async function api(path,opt){
+  const r=await fetch(path,{cache:'no-store',...opt});
+  let j; try{j=await r.json()}catch{throw new Error('HTTP '+r.status)}
+  if(j&&j.error)throw new Error(j.error);
+  return j;
+}
+const post=(path,body)=>api(path,{method:'POST',...(body?{headers:{'content-type':'application/json'},body:JSON.stringify(body)}:{})});
+
+function note(msg,cls){ // local line in the activity log, replaced by the server's own entries on the next poll
+  const t=$('term'),s=el('span',cls||'m','> '+msg+'\n');t.prepend(s)}
+
+/* ── status ── */
+function renderStatus(s){
+  const c=s.card, w=s.watcher, pill=$('cardpill');
+  pill.classList.toggle('off',!c.present);
+  pill.replaceChildren('card ',el('b',null,c.present?`usb${c.usb} · ${fmt(c.free)} free`:'no USB drive'));
+  $('sCard').textContent=c.present?c.saves:'–';
+  $('sSync').textContent=c.present?w.synced:'–';
+  $('sWait').textContent=c.present?w.waiting:'–';
+  const wt=$('watchText'), wb=$('watch'); wt.replaceChildren();
+  if(!c.present){wb.className='watch off';wt.append(el('b',null,'No USB drive. '),'Plug one in and it becomes the memory card.')}
+  else if(!w.enabled){wb.className='watch';wt.append(el('b',null,'Automatic backup is off. '),'Saves are only copied when you ask.')}
+  else{wb.className='watch on';
+    wt.append(el('b',null,'Watching '+w.console_saves+' saves'),' · checked '+ago(Math.max(0,s.now-w.last_sweep)));
+    if(w.running_title)wt.append(' · playing ',el('b',null,w.running_name||w.running_title))}
+  const j=s.job;
+  if(j.active){$('bar').style.width=(j.total?Math.min(100,j.done/j.total*100):5)+'%';
+    $('job').textContent=`copying ${j.title} ${j.save} · ${fmt(j.done)} of ${fmt(j.total)}`}
+  else{$('bar').style.width='0';$('job').textContent=w.queued?`${w.queued} manual backup(s) queued`:''}
+  const term=$('term'); term.replaceChildren();
+  const cls={backup:'o',import:'p',error:'e',delete:'w',card:'p'};
+  if(!s.activity.length)term.append(el('span','m','nothing has happened yet\n'));
+  for(const a of s.activity){
+    term.append(el('span','m','['+new Date(a.at*1000).toLocaleTimeString()+'] '),el('span',cls[a.kind]||'m',a.text+'\n'))}
+  $('ver').textContent='v'+String(s.version).replace(/^v/,'');
+  if(!settingsDirty)fillSettings(s);
+}
+function fillSettings(s){
+  const c=s.settings;
+  $('cEnabled').checked=c.enabled;$('cPrev').checked=c.keep_previous;$('cNotify').checked=c.notify;$('cSys').checked=c.include_system_backups;
+  $('cPoll').value=c.poll_seconds;$('cSettle').value=c.settle_seconds;$('cMin').value=c.min_interval_seconds;
+  const u=$('cUsb'),opts=[[-1,'automatic']];
+  for(let n=0;n<8;n++)opts.push([n,'usb'+n+(s.drives.includes(n)?' (connected)':'')]);
+  u.replaceChildren(...opts.map(([v,t])=>{const o=el('option',null,t);o.value=v;return o}));u.value=c.usb;
+}
+['cEnabled','cPrev','cNotify','cSys','cPoll','cSettle','cMin','cUsb'].forEach(k=>$(k).addEventListener('input',()=>settingsDirty=true));
+$('saveSet').onclick=async()=>{
+  const b=$('saveSet');b.disabled=true;
+  try{await post('/api/mc/settings',{enabled:$('cEnabled').checked,keep_previous:$('cPrev').checked,notify:$('cNotify').checked,
+      include_system_backups:$('cSys').checked,poll_seconds:+$('cPoll').value||5,settle_seconds:+$('cSettle').value||0,
+      min_interval_seconds:+$('cMin').value||0,usb:+$('cUsb').value});
+    settingsDirty=false;b.textContent='SAVED ✓';setTimeout(()=>b.textContent='SAVE SETTINGS',1500);await poll(true)}
+  catch(e){note('settings: '+e.message,'e')}
+  b.disabled=false};
+
+/* ── lists ── */
+async function loadLists(){
+  if(loadingLists)return; loadingLists=true;
+  try{const [c,k]=await Promise.all([api('/api/mc/card'),api('/api/mc/console')]);
+    cardPresent=c.present;cardSaves=c.saves;consoleSaves=k.saves;lastListLoad=Date.now();renderList()}
+  catch(e){note('could not load the save list: '+e.message,'e')}
+  loadingLists=false}
+
+function gameIcon(titleId){
+  const box=el('div','gicon',titleId.slice(0,4)), img=new Image();
+  img.alt='';img.onload=()=>box.replaceChildren(img);img.src='/api/mc/icon?title='+encodeURIComponent(titleId);
+  return box}
+const saveLabel=s=>s.sub_title||s.main_title||s.save.replace(/^sdimg_/,'');
+const matches=(s,q)=>!q||[s.title_name,s.title_id,s.save,s.main_title,s.sub_title,s.user_name,s.uid].some(v=>v&&v.toLowerCase().includes(q));
+const STATE={synced:['ON CARD','ok'],pending:['WAITING','wait'],missing:['NOT ON CARD',''],card_newer:['CARD IS NEWER','newer'],no_card:['NO DRIVE','']};
+
+function renderList(){
+  const list=$('list'), q=$('q').value.trim().toLowerCase(), src=tab==='card'?cardSaves:consoleSaves;
+  $('nCard').textContent=cardPresent?'· '+cardSaves.length:'';$('nConsole').textContent='· '+consoleSaves.length;
+  $('backupAll').hidden=tab!=='console';$('backupAll').disabled=!cardPresent||!consoleSaves.length;
+  list.replaceChildren();
+  if(tab==='card'&&!cardPresent){const e=el('div','empty');e.append(el('div','ico','[ ⏏ ]'),el('b',null,'No USB drive connected'),el('div',null,'Plug a drive into the PS5. Saves land in /memcard on it.'));list.append(e);return}
+  const rows=src.filter(s=>matches(s,q));
+  if(!rows.length){const e=el('div','empty');
+    e.append(el('div','ico',q?'[ ? ]':'[ ∅ ]'),el('b',null,q?'Nothing matches that filter':tab==='card'?'The card is empty':'No saves on this console'),
+      el('div',null,q?'':tab==='card'?'Saves show up here as soon as the first backup finishes.':''));list.append(e);return}
+  const groups=new Map();
+  for(const s of rows){if(!groups.has(s.title_id))groups.set(s.title_id,[]);groups.get(s.title_id).push(s)}
+  const sorted=[...groups.entries()].sort((a,b)=>(a[1][0].title_name||a[0]).localeCompare(b[1][0].title_name||b[0]));
+  for(const [tid,saves] of sorted){
+    const g=el('div','game'), h=el('div','ghead'), nm=el('div','gname');
+    nm.append(el('b',null,saves[0].title_name||tid),el('small',null,`${tid} · ${saves[0].type.toUpperCase()} · ${saves.length} save${saves.length>1?'s':''}`));
+    h.append(gameIcon(tid),nm);
+    if(tab==='console'){const b=el('button','btn sec sm','BACK UP GAME');b.disabled=!cardPresent;
+      b.onclick=()=>backup({title:tid},b);h.append(b)}
+    g.append(h);
+    saves.sort((a,b)=>b.mtime-a.mtime);
+    for(const s of saves)g.append(tab==='card'?cardRow(s):consoleRow(s));
+    list.append(g)}
+}
+function cardRow(s){
+  const r=el('div','srow'), i=el('div','sinfo'), a=el('div','sact'), sm=el('small');
+  i.append(el('b',null,saveLabel(s)));
+  sm.append('from ',el('em',null,s.user_name||s.uid),` · ${fmt(s.size)} · ${when(s.mtime)}`+(s.format==='folder'?' · decrypted folder':''));
+  i.append(sm);r.title=s.id;
+  const imp=el('button','btn pri sm','IMPORT ▸');imp.onclick=()=>openImport(s);
+  const del=el('button','btn sec sm danger','✕');del.title='Delete from the card';
+  del.onclick=async()=>{
+    if(!del.classList.contains('arm')){del.classList.add('arm');del.textContent='DELETE?';setTimeout(()=>{del.classList.remove('arm');del.textContent='✕'},3000);return}
+    del.disabled=true;
+    try{await post('/api/mc/delete?id='+encodeURIComponent(s.id));await refreshAll()}catch(e){note('delete: '+e.message,'e');del.disabled=false}};
+  a.append(imp,del);r.append(i,a);return r}
+function consoleRow(s){
+  const r=el('div','srow'), i=el('div','sinfo'), a=el('div','sact'), sm=el('small');
+  i.append(el('b',null,saveLabel(s)));
+  sm.append(el('em',null,s.user_name||s.uid),` · ${fmt(s.size)} · ${when(s.mtime)}`);i.append(sm);
+  const [txt,cls]=STATE[s.state]||[s.state,''];
+  const chip=el('span','chip '+cls,txt);
+  if(s.state==='synced')chip.title='Backed up '+when(s.backed_at);
+  if(s.state==='card_newer')chip.title='The copy on the card is newer than this save. It is only overwritten if you back it up yourself.';
+  const b=el('button','btn sec sm','BACK UP');b.disabled=!cardPresent;
+  b.onclick=()=>backup({uid:s.uid,title:s.title_id,save:s.save},b);
+  a.append(chip,b);r.append(i,a);return r}
+
+async function backup(what,btn){
+  const q=Object.entries(what).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
+  const old=btn.textContent;btn.disabled=true;btn.textContent='QUEUED';
+  try{await post('/api/mc/backup?'+q);note('backup requested','o')}catch(e){note('backup: '+e.message,'e')}
+  setTimeout(()=>{btn.textContent=old;btn.disabled=!cardPresent;refreshAll()},1500)}
+$('backupAll').onclick=()=>backup({all:1},$('backupAll'));
+
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;localStorage.mcTab=tab;
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));renderList()});
+document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x.dataset.tab===tab));
+$('q').oninput=renderList;
+
+/* ── import dialog ── */
+function openImport(s){
+  dlg={save:s,uid:null,busy:false};
+  $('dTitle').textContent=(s.title_name||s.title_id)+' · '+saveLabel(s);
+  $('dMeta').textContent=`${s.id} · ${fmt(s.size)} · saved ${when(s.mtime)} · from ${s.user_name||s.uid}`;
+  $('dPrev').checked=false;$('dPrevBox').hidden=!s.has_previous;$('dErr').hidden=true;$('dGo').textContent='IMPORT ▸';
+  const box=$('dUsers');box.replaceChildren();
+  const users=(status&&status.users)||[];
+  if(!users.length)box.append(el('div','note','No profiles were found on this console.'));
+  for(const u of users){const b=el('button');b.append(u.name,el('small',null,u.id+(u.id===s.uid?' · same id as the card copy':'')));
+    b.onclick=()=>{dlg.uid=u.id;dlg.user=u.name;box.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));dlgRefresh()};box.append(b)}
+  if(users.length===1)box.firstChild.click(); else dlgRefresh();
+  $('veil').classList.add('show')}
+function dlgRefresh(){
+  const s=dlg.save, clash=dlg.uid&&consoleSaves.find(c=>c.uid===dlg.uid&&c.title_id===s.title_id&&c.save===s.save);
+  $('dWarn').hidden=!clash;
+  if(clash)$('dWarn').textContent=`${dlg.user} already has this save (${when(clash.mtime)}). Importing replaces it.`;
+  $('dGo').disabled=!dlg.uid||dlg.busy;$('dGo').textContent=dlg.busy?'IMPORTING…':clash?'REPLACE & IMPORT ▸':'IMPORT ▸'}
+function closeImport(){if(dlg&&dlg.busy)return;$('veil').classList.remove('show');dlg=null}
+$('dCancel').onclick=closeImport;
+$('veil').addEventListener('click',e=>{if(e.target===$('veil'))closeImport()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeImport()});
+$('dGo').onclick=async()=>{
+  if(!dlg||!dlg.uid||dlg.busy)return;
+  dlg.busy=true;dlgRefresh();$('dErr').hidden=true;$('dCancel').disabled=true;
+  const s=dlg.save;
+  try{const r=await post(`/api/mc/import?id=${encodeURIComponent(s.id)}&uid=${encodeURIComponent(dlg.uid)}${$('dPrev').checked?'&previous=1':''}`);
+    note(`imported ${s.title_name||s.title_id} to ${dlg.user}`+(r.warning?' ('+r.warning+')':''),'p');
+    dlg.busy=false;$('dCancel').disabled=false;closeImport();refreshAll()}
+  catch(e){dlg.busy=false;$('dCancel').disabled=false;$('dErr').textContent=e.message;$('dErr').hidden=false;dlgRefresh()}};
+
+/* ── polling ── */
+let failures=0;
+async function poll(force){
+  try{status=await api('/api/mc/status');failures=0;renderStatus(status);
+    const a=status.activity[0], seen=(a?a.at+a.text:'')+'|'+status.card.path+'|'+status.card.saves+'|'+status.job.active;
+    if(force||seen!==lastSeen||Date.now()-lastListLoad>20000){lastSeen=seen;await loadLists()}}
+  catch(e){if(++failures>=2){$('watch').className='watch off';$('watchText').textContent='Lost contact with the console. Is the payload still running?';
+    $('cardpill').classList.add('off');$('cardpill').replaceChildren('console ',el('b',null,'offline'))}}}
+const refreshAll=()=>poll(true);
+(async function loop(){await poll();setTimeout(loop,document.hidden?6000:2000)})();
+</script>
+</body>
+</html>

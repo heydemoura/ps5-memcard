@@ -1,0 +1,36 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Memory card rules on a fake console
+        run: make test
+
+  payload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends unzip ca-certificates curl clang-18 llvm-18 lld-18
+      - name: Download PS5 Payload SDK
+        run: |
+          curl -fLsS -o /tmp/ps5-payload-sdk.zip \
+            https://github.com/ps5-payload-dev/sdk/releases/latest/download/ps5-payload-sdk.zip
+          unzip -q /tmp/ps5-payload-sdk.zip -d /tmp
+      - name: Build
+        run: make PS5_PAYLOAD_SDK=/tmp/ps5-payload-sdk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ps5-memcard
+          path: ps5-memcard.elf

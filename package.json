@@ -1,0 +1,10 @@
+{
+  "name": "ps5-memcard-tests",
+  "private": true,
+  "scripts": {
+    "test:ui": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
+  }
+}

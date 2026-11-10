@@ -1,0 +1,6 @@
+*.elf
+build/
+src/*.o
+node_modules/
+test-results/
+playwright-report/
