@@ -64,6 +64,17 @@ input[type=text],input[type=number],select{width:100%;font-family:var(--mono);fo
 input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(57,255,159,.15)}
 select option{background:#0b0e15}
 
+.slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;margin-bottom:14px}
+.slot{position:relative;text-align:left;font-family:var(--mono);color:var(--txt);background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:12px;padding:11px 34px 11px 13px;transition:.15s;min-width:0}
+button.slot,.slot[role=button]{cursor:pointer}
+.slot b{display:block;font-size:13px;font-weight:800;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slot small{display:block;margin-top:3px;font-size:10px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slot.on{border-color:var(--acc);box-shadow:0 0 18px rgba(57,255,159,.15)} .slot.on b{color:var(--acc)}
+.slot:focus-visible{outline:2px solid var(--acc3);outline-offset:2px}
+.slot.idle{border-style:dashed;padding-right:13px} .slot.idle b{color:var(--mut)}
+.slot.idle .btn{margin-top:8px;width:100%}
+.slot .ren{position:absolute;top:7px;right:7px;width:24px;height:24px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--mut);font-size:13px;cursor:pointer}
+.slot .ren:hover{color:var(--acc3);border-color:var(--line)}
 .tabs{display:flex;gap:6px;margin-bottom:14px}
 .tabs button{flex:1;font-family:var(--mono);font-size:12px;letter-spacing:.12em;color:var(--mut);background:transparent;border:1px solid var(--line);border-radius:10px;padding:10px 8px;cursor:pointer}
 .tabs button.on{color:var(--acc);border-color:var(--acc);background:rgba(57,255,159,.07)}
@@ -162,12 +173,13 @@ footer{text-align:center;color:var(--mut);font-family:var(--mono);font-size:12px
 <header>
   <div class="tag">◆ PS5 SAVE MIRROR · USB /memcard</div>
   <h1>Saves on a <span class="grad">memory card</span><span class="cursor"></span></h1>
-  <p class="sub">Every save on this console is copied to <code>/memcard</code> on your USB drive while you play. Pull any of them back into any profile.</p>
+  <p class="sub">Every save on this console is copied to <code>/memcard</code> on your USB drives while you play. Pull any of them back into any profile.</p>
 </header>
 
 <main>
   <section class="card">
     <div class="ct"><span>SAVES</span><span>01</span></div>
+    <div class="slots" id="slots" hidden></div>
     <div class="tabs">
       <button data-tab="card" class="on">ON THE CARD <b id="nCard"></b></button>
       <button data-tab="console">ON THIS CONSOLE <b id="nConsole"></b></button>
@@ -182,7 +194,7 @@ footer{text-align:center;color:var(--mut);font-family:var(--mono);font-size:12px
   <section class="card">
     <div class="ct"><span>STATUS</span><div class="dots"><i></i><i></i><i></i></div></div>
     <div class="stats">
-      <div class="stat"><b id="sCard">–</b><small>ON CARD</small></div>
+      <div class="stat"><b id="sCard">–</b><small id="lCard">ON CARD</small></div>
       <div class="stat"><b id="sSync">–</b><small>IN SYNC</small></div>
       <div class="stat"><b id="sWait">–</b><small>WAITING</small></div>
     </div>
@@ -198,14 +210,16 @@ footer{text-align:center;color:var(--mut);font-family:var(--mono);font-size:12px
         <label><input type="checkbox" id="cPrev"> keep the previous copy of each save</label>
         <label><input type="checkbox" id="cNotify"> show a console notification after a backup</label>
         <label><input type="checkbox" id="cSys"> also copy the system's own backup images (sce_bu)</label>
+        <label><input type="checkbox" id="cAll"> use every connected USB drive as a memory card</label>
       </div>
       <div class="sgrid">
         <div><label for="cPoll">CHECK EVERY (s)</label><input type="number" id="cPoll" min="2" max="600"></div>
         <div><label for="cSettle">QUIET TIME (s)</label><input type="number" id="cSettle" min="0" max="600"></div>
         <div><label for="cMin">IN-GAME GAP (s)</label><input type="number" id="cMin" min="0" max="86400"></div>
-        <div><label for="cUsb">USB DRIVE</label><select id="cUsb"></select></div>
+        <div><label for="cUsb">BACK UP TO</label><select id="cUsb"></select></div>
       </div>
       <button class="btn sec" id="saveSet">SAVE SETTINGS</button>
+      <div class="note"><b>Memory cards:</b> a drive with a <code>/memcard</code> folder is a card, and saves go to every card that is plugged in. With no card around, the first drive becomes one. Other drives are left alone until you press <b>Use as card</b>.</div>
       <div class="note"><b>Quiet time</b> is how long a save must sit unchanged before it is copied. <b>In-game gap</b> limits how often the same save is copied while its game is running; when the game closes it is copied right away.</div>
     </details>
   </section>
@@ -232,12 +246,18 @@ footer{text-align:center;color:var(--mut);font-family:var(--mono);font-size:12px
 <script>
 const $=id=>document.getElementById(id);
 const el=(tag,cls,txt)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e};
-let tab=localStorage.mcTab==='console'?'console':'card', status=null, cardSaves=[], consoleSaves=[], cardPresent=false;
+let tab=localStorage.mcTab==='console'?'console':'card', status=null, cardSaves=[], consoleSaves=[];
+let sel=localStorage.mcSel==null||localStorage.mcSel===''?-1:+localStorage.mcSel; // card filter: -1 = every card
 let lastSeen='', lastListLoad=0, settingsDirty=false, dlg=null, loadingLists=false;
 
 const fmt=n=>n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB';
 const when=t=>t?new Date(t*1000).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}):'–';
 const ago=s=>s<2?'just now':s<90?Math.round(s)+' s ago':s<5400?Math.round(s/60)+' min ago':Math.round(s/3600)+' h ago';
+const drives=()=>(status&&status.drives)||[];
+const cards=()=>drives().filter(d=>d.card);
+const cardName=u=>{const d=drives().find(x=>x.usb===u);return d&&d.label?d.label:'usb'+u};
+const anyCard=()=>cards().length>0;
+const target=()=>sel>=0?'&usb='+sel:''; // which card a backup goes to
 
 async function api(path,opt){
   const r=await fetch(path,{cache:'no-store',...opt});
@@ -252,21 +272,27 @@ function note(msg,cls){ // local line in the activity log, replaced by the serve
 
 /* ── status ── */
 function renderStatus(s){
-  const c=s.card, w=s.watcher, pill=$('cardpill');
-  pill.classList.toggle('off',!c.present);
-  pill.replaceChildren('card ',el('b',null,c.present?`usb${c.usb} · ${fmt(c.free)} free`:'no USB drive'));
-  $('sCard').textContent=c.present?c.saves:'–';
-  $('sSync').textContent=c.present?w.synced:'–';
-  $('sWait').textContent=c.present?w.waiting:'–';
+  const w=s.watcher, cs=cards(), pill=$('cardpill');
+  if(sel>=0&&!cs.some(c=>c.usb===sel)){sel=-1;localStorage.mcSel=''}
+  pill.classList.toggle('off',!cs.length);
+  if(!cs.length)pill.replaceChildren('card ',el('b',null,drives().length?'none in use':'no USB drive'));
+  else if(cs.length===1)pill.replaceChildren('card ',el('b',null,`${cardName(cs[0].usb)} · ${fmt(cs[0].free)} free`));
+  else pill.replaceChildren('cards ',el('b',null,`${cs.length} · ${cs.map(c=>'usb'+c.usb).join(', ')}`));
+  renderSlots();
+  const one=sel>=0?cs.find(c=>c.usb===sel):null;
+  $('sCard').textContent=cs.length?(one?one.saves:s.card.saves):'–';
+  $('sSync').textContent=cs.length?(one?one.synced:w.synced):'–';
+  $('sWait').textContent=cs.length?(one?one.waiting:w.waiting):'–';
+  $('lCard').textContent=one||cs.length<2?'ON CARD':'ON '+cs.length+' CARDS';
   const wt=$('watchText'), wb=$('watch'); wt.replaceChildren();
-  if(!c.present){wb.className='watch off';wt.append(el('b',null,'No USB drive. '),'Plug one in and it becomes the memory card.')}
+  if(!cs.length){wb.className='watch off';wt.append(el('b',null,'No memory card. '),drives().length?'None of the connected drives is in use as a card.':'Plug in a USB drive and it becomes the memory card.')}
   else if(!w.enabled){wb.className='watch';wt.append(el('b',null,'Automatic backup is off. '),'Saves are only copied when you ask.')}
   else{wb.className='watch on';
-    wt.append(el('b',null,'Watching '+w.console_saves+' saves'),' · checked '+ago(Math.max(0,s.now-w.last_sweep)));
+    wt.append(el('b',null,'Watching '+w.console_saves+' saves'),(cs.length>1?' · '+cs.length+' cards':'')+' · checked '+ago(Math.max(0,s.now-w.last_sweep)));
     if(w.running_title)wt.append(' · playing ',el('b',null,w.running_name||w.running_title))}
   const j=s.job;
   if(j.active){$('bar').style.width=(j.total?Math.min(100,j.done/j.total*100):5)+'%';
-    $('job').textContent=`copying ${j.title} ${j.save} · ${fmt(j.done)} of ${fmt(j.total)}`}
+    $('job').textContent=`copying ${j.title} ${j.save} to ${cardName(j.usb)} · ${fmt(j.done)} of ${fmt(j.total)}`}
   else{$('bar').style.width='0';$('job').textContent=w.queued?`${w.queued} manual backup(s) queued`:''}
   const term=$('term'); term.replaceChildren();
   const cls={backup:'o',import:'p',error:'e',delete:'w',card:'p'};
@@ -276,19 +302,49 @@ function renderStatus(s){
   $('ver').textContent='v'+String(s.version).replace(/^v/,'');
   if(!settingsDirty)fillSettings(s);
 }
+
+/* One tile per connected drive: pick a card, name it, or start using a drive as a card. */
+function renderSlots(){
+  const box=$('slots'), ds=drives(), cs=cards(); box.replaceChildren(); box.hidden=!ds.length;
+  if(cs.length>1){const all=el('button','slot'+(sel<0?' on':''));all.dataset.usb='all';
+    all.append(el('b',null,'All cards'),el('small',null,`${cs.length} cards · ${cs.reduce((n,c)=>n+c.saves,0)} copies`));
+    all.onclick=()=>pick(-1);box.append(all)}
+  for(const d of ds){
+    if(d.card){
+      const t=el('div','slot'+(sel===d.usb||cs.length===1?' on':''));t.dataset.usb=d.usb;t.tabIndex=0;t.setAttribute('role','button');
+      const state=d.waiting?`${d.waiting} waiting`:'in sync';
+      t.append(el('b',null,d.label||'USB '+d.usb),el('small',null,`usb${d.usb} · ${d.saves} save${d.saves===1?'':'s'} · ${state}`),el('small',null,`${fmt(d.free)} free of ${fmt(d.total)}`));
+      const ren=el('button','ren','✎');ren.title='Name this card';
+      ren.onclick=async e=>{e.stopPropagation();
+        const name=prompt('Name for the card on usb'+d.usb+' (kept on the card itself)',d.label||'');if(name==null)return;
+        try{await post(`/api/mc/label?usb=${d.usb}&name=${encodeURIComponent(name.trim())}`);await poll(true)}catch(err){note('rename: '+err.message,'e')}};
+      t.append(ren);
+      if(cs.length>1){t.onclick=()=>pick(d.usb);t.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();pick(d.usb)}}}
+      box.append(t)}
+    else{
+      const t=el('div','slot idle');t.dataset.usb=d.usb;
+      t.append(el('b',null,'USB '+d.usb),el('small',null,'not a memory card'),el('small',null,`${fmt(d.free)} free of ${fmt(d.total)}`));
+      const use=el('button','btn sec sm','USE AS CARD');
+      use.onclick=async()=>{use.disabled=true;
+        try{await post('/api/mc/card_init?usb='+d.usb);note('usb'+d.usb+' is now a memory card','p');await poll(true)}catch(err){note(err.message,'e');use.disabled=false}};
+      t.append(use);box.append(t)}}
+}
+function pick(u){sel=u;localStorage.mcSel=u<0?'':u;if(status)renderStatus(status);renderList()}
+
 function fillSettings(s){
   const c=s.settings;
   $('cEnabled').checked=c.enabled;$('cPrev').checked=c.keep_previous;$('cNotify').checked=c.notify;$('cSys').checked=c.include_system_backups;
+  $('cAll').checked=c.all_drives;
   $('cPoll').value=c.poll_seconds;$('cSettle').value=c.settle_seconds;$('cMin').value=c.min_interval_seconds;
-  const u=$('cUsb'),opts=[[-1,'automatic']];
-  for(let n=0;n<8;n++)opts.push([n,'usb'+n+(s.drives.includes(n)?' (connected)':'')]);
+  const u=$('cUsb'),opts=[[-1,'every card']],on=s.drives.map(d=>d.usb);
+  for(let n=0;n<8;n++)opts.push([n,'only usb'+n+(on.includes(n)?' (connected)':'')]);
   u.replaceChildren(...opts.map(([v,t])=>{const o=el('option',null,t);o.value=v;return o}));u.value=c.usb;
 }
-['cEnabled','cPrev','cNotify','cSys','cPoll','cSettle','cMin','cUsb'].forEach(k=>$(k).addEventListener('input',()=>settingsDirty=true));
+['cEnabled','cPrev','cNotify','cSys','cAll','cPoll','cSettle','cMin','cUsb'].forEach(k=>$(k).addEventListener('input',()=>settingsDirty=true));
 $('saveSet').onclick=async()=>{
   const b=$('saveSet');b.disabled=true;
   try{await post('/api/mc/settings',{enabled:$('cEnabled').checked,keep_previous:$('cPrev').checked,notify:$('cNotify').checked,
-      include_system_backups:$('cSys').checked,poll_seconds:+$('cPoll').value||5,settle_seconds:+$('cSettle').value||0,
+      include_system_backups:$('cSys').checked,all_drives:$('cAll').checked,poll_seconds:+$('cPoll').value||5,settle_seconds:+$('cSettle').value||0,
       min_interval_seconds:+$('cMin').value||0,usb:+$('cUsb').value});
     settingsDirty=false;b.textContent='SAVED ✓';setTimeout(()=>b.textContent='SAVE SETTINGS',1500);await poll(true)}
   catch(e){note('settings: '+e.message,'e')}
@@ -298,7 +354,7 @@ $('saveSet').onclick=async()=>{
 async function loadLists(){
   if(loadingLists)return; loadingLists=true;
   try{const [c,k]=await Promise.all([api('/api/mc/card'),api('/api/mc/console')]);
-    cardPresent=c.present;cardSaves=c.saves;consoleSaves=k.saves;lastListLoad=Date.now();renderList()}
+    cardSaves=c.saves;consoleSaves=k.saves;lastListLoad=Date.now();renderList()}
   catch(e){note('could not load the save list: '+e.message,'e')}
   loadingLists=false}
 
@@ -308,14 +364,19 @@ function gameIcon(titleId){
   return box}
 const saveLabel=s=>s.sub_title||s.main_title||s.save.replace(/^sdimg_/,'');
 const matches=(s,q)=>!q||[s.title_name,s.title_id,s.save,s.main_title,s.sub_title,s.user_name,s.uid].some(v=>v&&v.toLowerCase().includes(q));
-const STATE={synced:['ON CARD','ok'],pending:['WAITING','wait'],missing:['NOT ON CARD',''],card_newer:['CARD IS NEWER','newer'],no_card:['NO DRIVE','']};
+const STATE={synced:['ON CARD','ok','✓','on the card'],pending:['WAITING','wait','…','waiting to be copied'],missing:['NOT ON CARD','','–','not on the card'],
+  card_newer:['CARD IS NEWER','newer','▲','the copy on the card is newer than this save; it is only overwritten if you back it up yourself'],no_card:['NO CARD','','','']};
 
 function renderList(){
-  const list=$('list'), q=$('q').value.trim().toLowerCase(), src=tab==='card'?cardSaves:consoleSaves;
-  $('nCard').textContent=cardPresent?'· '+cardSaves.length:'';$('nConsole').textContent='· '+consoleSaves.length;
-  $('backupAll').hidden=tab!=='console';$('backupAll').disabled=!cardPresent||!consoleSaves.length;
+  const list=$('list'), q=$('q').value.trim().toLowerCase(), cs=cards(), many=cs.length>1;
+  const onCards=cardSaves.filter(s=>sel<0||s.usb===sel);
+  const src=tab==='card'?onCards:consoleSaves;
+  $('nCard').textContent=cs.length?'· '+onCards.length:'';$('nConsole').textContent='· '+consoleSaves.length;
+  $('backupAll').hidden=tab!=='console';$('backupAll').disabled=!cs.length||!consoleSaves.length;
+  $('backupAll').textContent=many&&sel>=0?`BACK UP ALL TO ${cardName(sel).toUpperCase()} ▸`:'BACK UP ALL ▸';
   list.replaceChildren();
-  if(tab==='card'&&!cardPresent){const e=el('div','empty');e.append(el('div','ico','[ ⏏ ]'),el('b',null,'No USB drive connected'),el('div',null,'Plug a drive into the PS5. Saves land in /memcard on it.'));list.append(e);return}
+  if(tab==='card'&&!cs.length){const e=el('div','empty');e.append(el('div','ico','[ ⏏ ]'),el('b',null,drives().length?'No memory card in use':'No USB drive connected'),
+    el('div',null,drives().length?'Pick a drive above, or check the USB DRIVE setting.':'Plug a drive into the PS5. Saves land in /memcard on it.'));list.append(e);return}
   const rows=src.filter(s=>matches(s,q));
   if(!rows.length){const e=el('div','empty');
     e.append(el('div','ico',q?'[ ? ]':'[ ∅ ]'),el('b',null,q?'Nothing matches that filter':tab==='card'?'The card is empty':'No saves on this console'),
@@ -325,44 +386,49 @@ function renderList(){
   const sorted=[...groups.entries()].sort((a,b)=>(a[1][0].title_name||a[0]).localeCompare(b[1][0].title_name||b[0]));
   for(const [tid,saves] of sorted){
     const g=el('div','game'), h=el('div','ghead'), nm=el('div','gname');
-    nm.append(el('b',null,saves[0].title_name||tid),el('small',null,`${tid} · ${saves[0].type.toUpperCase()} · ${saves.length} save${saves.length>1?'s':''}`));
+    const what=tab==='card'&&many&&sel<0?'cop'+(saves.length>1?'ies':'y'):'save'+(saves.length>1?'s':'');
+    nm.append(el('b',null,saves[0].title_name||tid),el('small',null,`${tid} · ${saves[0].type.toUpperCase()} · ${saves.length} ${what}`));
     h.append(gameIcon(tid),nm);
-    if(tab==='console'){const b=el('button','btn sec sm','BACK UP GAME');b.disabled=!cardPresent;
+    if(tab==='console'){const b=el('button','btn sec sm','BACK UP GAME');b.disabled=!cs.length;
       b.onclick=()=>backup({title:tid},b);h.append(b)}
     g.append(h);
-    saves.sort((a,b)=>b.mtime-a.mtime);
-    for(const s of saves)g.append(tab==='card'?cardRow(s):consoleRow(s));
+    saves.sort((a,b)=>b.mtime-a.mtime||(a.usb||0)-(b.usb||0));
+    for(const s of saves)g.append(tab==='card'?cardRow(s,many&&sel<0):consoleRow(s,many&&sel<0));
     list.append(g)}
 }
-function cardRow(s){
+function cardRow(s,showCard){
   const r=el('div','srow'), i=el('div','sinfo'), a=el('div','sact'), sm=el('small');
   i.append(el('b',null,saveLabel(s)));
   sm.append('from ',el('em',null,s.user_name||s.uid),` · ${fmt(s.size)} · ${when(s.mtime)}`+(s.format==='folder'?' · decrypted folder':''));
-  i.append(sm);r.title=s.id;
+  i.append(sm);r.title=`usb${s.usb}: ${s.id}`;r.dataset.usb=s.usb;
+  if(showCard)a.append(el('span','chip',cardName(s.usb)));
   const imp=el('button','btn pri sm','IMPORT ▸');imp.onclick=()=>openImport(s);
-  const del=el('button','btn sec sm danger','✕');del.title='Delete from the card';
+  const del=el('button','btn sec sm danger','✕');del.title='Delete from this card';
   del.onclick=async()=>{
     if(!del.classList.contains('arm')){del.classList.add('arm');del.textContent='DELETE?';setTimeout(()=>{del.classList.remove('arm');del.textContent='✕'},3000);return}
     del.disabled=true;
-    try{await post('/api/mc/delete?id='+encodeURIComponent(s.id));await refreshAll()}catch(e){note('delete: '+e.message,'e');del.disabled=false}};
+    try{await post(`/api/mc/delete?usb=${s.usb}&id=${encodeURIComponent(s.id)}`);await refreshAll()}catch(e){note('delete: '+e.message,'e');del.disabled=false}};
   a.append(imp,del);r.append(i,a);return r}
-function consoleRow(s){
+function consoleRow(s,perCard){
   const r=el('div','srow'), i=el('div','sinfo'), a=el('div','sact'), sm=el('small');
   i.append(el('b',null,saveLabel(s)));
   sm.append(el('em',null,s.user_name||s.uid),` · ${fmt(s.size)} · ${when(s.mtime)}`);i.append(sm);
-  const [txt,cls]=STATE[s.state]||[s.state,''];
-  const chip=el('span','chip '+cls,txt);
-  if(s.state==='synced')chip.title='Backed up '+when(s.backed_at);
-  if(s.state==='card_newer')chip.title='The copy on the card is newer than this save. It is only overwritten if you back it up yourself.';
-  const b=el('button','btn sec sm','BACK UP');b.disabled=!cardPresent;
+  if(perCard){ // one small chip per card
+    for(const c of s.cards){const [,cls,mark,tip]=STATE[c.state]||['','','?',c.state];
+      const chip=el('span','chip '+cls,cardName(c.usb)+' '+mark);chip.dataset.usb=c.usb;chip.dataset.state=c.state;
+      chip.title=cardName(c.usb)+': '+tip+(c.state==='synced'?', backed up '+when(c.backed_at):'');a.append(chip)}}
+  else{const c=sel>=0?s.cards.find(x=>x.usb===sel):null, st=c?c.state:s.state, [txt,cls,,tip]=STATE[st]||[st,'','',''];
+    const chip=el('span','chip '+cls,txt);chip.dataset.state=st;
+    chip.title=st==='synced'?'Backed up '+when(c?c.backed_at:s.backed_at):tip;a.append(chip)}
+  const b=el('button','btn sec sm','BACK UP');b.disabled=!anyCard();
   b.onclick=()=>backup({uid:s.uid,title:s.title_id,save:s.save},b);
-  a.append(chip,b);r.append(i,a);return r}
+  a.append(b);r.append(i,a);return r}
 
 async function backup(what,btn){
-  const q=Object.entries(what).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
+  const q=Object.entries(what).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&')+target();
   const old=btn.textContent;btn.disabled=true;btn.textContent='QUEUED';
-  try{await post('/api/mc/backup?'+q);note('backup requested','o')}catch(e){note('backup: '+e.message,'e')}
-  setTimeout(()=>{btn.textContent=old;btn.disabled=!cardPresent;refreshAll()},1500)}
+  try{await post('/api/mc/backup?'+q);note('backup requested'+(sel>=0?' for '+cardName(sel):''),'o')}catch(e){note('backup: '+e.message,'e')}
+  setTimeout(()=>{btn.textContent=old;btn.disabled=!anyCard();refreshAll()},1500)}
 $('backupAll').onclick=()=>backup({all:1},$('backupAll'));
 
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;localStorage.mcTab=tab;
@@ -374,7 +440,7 @@ $('q').oninput=renderList;
 function openImport(s){
   dlg={save:s,uid:null,busy:false};
   $('dTitle').textContent=(s.title_name||s.title_id)+' · '+saveLabel(s);
-  $('dMeta').textContent=`${s.id} · ${fmt(s.size)} · saved ${when(s.mtime)} · from ${s.user_name||s.uid}`;
+  $('dMeta').textContent=`${cardName(s.usb)} (usb${s.usb}) · ${s.id} · ${fmt(s.size)} · saved ${when(s.mtime)} · from ${s.user_name||s.uid}`;
   $('dPrev').checked=false;$('dPrevBox').hidden=!s.has_previous;$('dErr').hidden=true;$('dGo').textContent='IMPORT ▸';
   const box=$('dUsers');box.replaceChildren();
   const users=(status&&status.users)||[];
@@ -396,7 +462,7 @@ $('dGo').onclick=async()=>{
   if(!dlg||!dlg.uid||dlg.busy)return;
   dlg.busy=true;dlgRefresh();$('dErr').hidden=true;$('dCancel').disabled=true;
   const s=dlg.save;
-  try{const r=await post(`/api/mc/import?id=${encodeURIComponent(s.id)}&uid=${encodeURIComponent(dlg.uid)}${$('dPrev').checked?'&previous=1':''}`);
+  try{const r=await post(`/api/mc/import?usb=${s.usb}&id=${encodeURIComponent(s.id)}&uid=${encodeURIComponent(dlg.uid)}${$('dPrev').checked?'&previous=1':''}`);
     note(`imported ${s.title_name||s.title_id} to ${dlg.user}`+(r.warning?' ('+r.warning+')':''),'p');
     dlg.busy=false;$('dCancel').disabled=false;closeImport();refreshAll()}
   catch(e){dlg.busy=false;$('dCancel').disabled=false;$('dErr').textContent=e.message;$('dErr').hidden=false;dlgRefresh()}};
@@ -405,7 +471,7 @@ $('dGo').onclick=async()=>{
 let failures=0;
 async function poll(force){
   try{status=await api('/api/mc/status');failures=0;renderStatus(status);
-    const a=status.activity[0], seen=(a?a.at+a.text:'')+'|'+status.card.path+'|'+status.card.saves+'|'+status.job.active;
+    const a=status.activity[0], seen=(a?a.at+a.text:'')+'|'+status.drives.map(d=>d.usb+':'+d.card+':'+d.saves+':'+d.label).join(',')+'|'+status.job.active;
     if(force||seen!==lastSeen||Date.now()-lastListLoad>20000){lastSeen=seen;await loadLists()}}
   catch(e){if(++failures>=2){$('watch').className='watch off';$('watchText').textContent='Lost contact with the console. Is the payload still running?';
     $('cardpill').classList.add('off');$('cardpill').replaceChildren('console ',el('b',null,'offline'))}}}

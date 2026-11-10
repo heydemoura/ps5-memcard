@@ -9,6 +9,7 @@
  * file into the fake profile.
  *
  * Test controls:  POST /sim/usb?n=0&on=1   POST /sim/running?title=PPSA01234
+ * Eight fake ports exist (usb0..usb7); only usb0 starts plugged in.
  */
 #include "memcard.h"
 
@@ -142,8 +143,10 @@ static void seed(void) {
     put("home/1b2c3d4e/savedata_prospero/PPSA01325/sdimg_ASTRO0000", 2, 3 << 20, 60);
     snprintf(p, sizeof(p), "%s/usb0", g_root);
     mkdirs(p);
-    snprintf(p, sizeof(p), "%s/usb1", g_root);
-    mkdirs(p);
+    for (int n = 1; n < MC_MAX_USB; n++) {
+        snprintf(p, sizeof(p), "%s/usb%d", g_root, n);
+        mkdirs(p);
+    }
     snprintf(p, sizeof(p), "%s/appmeta", g_root);
     mkdirs(p);
 }
@@ -186,6 +189,8 @@ static void fake_import(int fd, const char *url) {
     mc_url_param(url, "id", id, sizeof(id));
     mc_url_param(url, "uid", uid, sizeof(uid));
     mc_url_param(url, "previous", prev, sizeof(prev));
+    char usb_arg[8];
+    int usb = mc_url_param(url, "usb", usb_arg, sizeof(usb_arg)) && usb_arg[0] ? atoi(usb_arg) : -1;
     char home[1024];
     struct stat st;
     snprintf(home, sizeof(home), "%s/home/%s", g_root, uid);
@@ -193,7 +198,7 @@ static void fake_import(int fd, const char *url) {
         reply_json(fd, "{\"error\":\"Pick a profile on this console to import to\"}");
         return;
     }
-    if (mc_import_prepare(id, !strcmp(prev, "1"), staged, sizeof(staged), title, sizeof(title), err,
+    if (mc_import_prepare(id, usb, !strcmp(prev, "1"), staged, sizeof(staged), title, sizeof(title), err,
                           sizeof(err)) < 0) {
         snprintf(json, sizeof(json), "{\"error\":\"%s\"}", err);
         reply_json(fd, json);

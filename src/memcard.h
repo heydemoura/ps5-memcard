@@ -2,12 +2,16 @@
  * ps5-memcard core: keeps a mirror of every console save on a USB drive under
  * /memcard, lists what is on the card and stages card saves for import.
  *
+ * Every connected USB drive can be a memory card (one per port, usb0..usb7);
+ * saves are mirrored to all of them and each keeps its own index.
+ *
  * This file is plain POSIX on purpose. The PS5 specifics (USB mount detection,
  * running title, title names, notifications) come in through mc_env_t, so the
  * same code runs on a PC against a fake tree (tests/sim).
  *
  * Card layout:
  *   <usb>/memcard/index.tsv                      what was backed up and from what
+ *   <usb>/memcard/label.txt                      optional name of the card
  *   <usb>/memcard/<user id>/profile.txt          name of the profile it came from
  *   <usb>/memcard/<user id>/<TITLE>/<save>       raw save image (same bytes as the console)
  *   <usb>/memcard/<user id>/<TITLE>/<save>.prev  previous generation (optional)
@@ -58,13 +62,14 @@ int mc_wait(void);
 void mc_wake(void);
 void mc_note_resume(void);
 
-/* /api/mc/{status,card,console,backup,delete,settings,rescan}. Returns a malloc'd
+/* /api/mc/{status,card,console,backup,delete,card_init,label,settings,rescan}. Returns a malloc'd
  * JSON body, or NULL when the URL is not one of ours. */
 char *mc_http(const char *method, const char *url, const char *body);
 
 /* Copy a card save to the staging dir so the importer never touches the card.
- * id is "<uid>/<TITLE>/<save>". On success staged holds <stage_dir>/<TITLE>/<save>. */
-int mc_import_prepare(const char *id, int previous, char *staged, size_t staged_size,
+ * id is "<uid>/<TITLE>/<save>", usb the card it is on (-1: the first card that
+ * has it). On success staged holds <stage_dir>/<TITLE>/<save>. */
+int mc_import_prepare(const char *id, int usb, int previous, char *staged, size_t staged_size,
                       char *title_id, size_t title_size, char *error, size_t error_size);
 void mc_import_result(const char *id, const char *uid, int ok, const char *detail);
 void mc_import_cleanup(void);

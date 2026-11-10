@@ -209,7 +209,7 @@ int main(void) {
     call("POST", "/api/mc/backup?all=1", NULL);
     mc_tick();
     CHECK(!there(P(CARD1 ".prev"))); /* asking again for an identical save copies nothing */
-    CHECK(strstr(call("GET", "/api/mc/status", NULL), "3 saves already up to date"));
+    CHECK(strstr(call("GET", "/api/mc/status", NULL), "3 copies already up to date"));
 
     printf("3. a changed save waits for the settle time, the old copy is kept\n");
     g_clock += 100;
@@ -270,16 +270,16 @@ int main(void) {
 
     printf("7. import staging copies from the card and leaves the card alone\n");
     char staged[1024], title[32], err[256];
-    CHECK(mc_import_prepare("10000000/PPSA01234/sdimg_SAVE0001", 0, staged, sizeof(staged), title,
+    CHECK(mc_import_prepare("10000000/PPSA01234/sdimg_SAVE0001", -1, 0, staged, sizeof(staged), title,
                             sizeof(title), err, sizeof(err)) == 0);
     CHECK(!strcmp(staged, P("data/import/PPSA01234/sdimg_SAVE0001")));
     CHECK(!strcmp(title, "PPSA01234"));
     CHECK(same(staged, "\x02old-console", 12));
     CHECK(same(P(CARD1), "\x02old-console", 12));
-    CHECK(mc_import_prepare("10000000/PPSA01234/sdimg_SAVE0001", 1, staged, sizeof(staged), title,
+    CHECK(mc_import_prepare("10000000/PPSA01234/sdimg_SAVE0001", -1, 1, staged, sizeof(staged), title,
                             sizeof(title), err, sizeof(err)) == 0);
     CHECK(same(staged, "\x02ps5-save-v4!", 13));
-    CHECK(mc_import_prepare("10000000/CUSA00001/sdimg_PS4SAVE", 0, staged, sizeof(staged), title,
+    CHECK(mc_import_prepare("10000000/CUSA00001/sdimg_PS4SAVE", -1, 0, staged, sizeof(staged), title,
                             sizeof(title), err, sizeof(err)) == 0);
     CHECK(same(P("data/import/CUSA00001/sdimg_PS4SAVE"), "\x01ps4-image", 10));
     CHECK(same(P("data/import/CUSA00001/PS4SAVE.bin"), "sealedkey", 9));
@@ -288,15 +288,15 @@ int main(void) {
     CHECK(strstr(call("GET", "/api/mc/status", NULL), "imported to guest"));
 
     printf("8. hostile references are refused\n");
-    CHECK(mc_import_prepare("../../home/10000000", 0, staged, sizeof(staged), title, sizeof(title),
+    CHECK(mc_import_prepare("../../home/10000000", -1, 0, staged, sizeof(staged), title, sizeof(title),
                             err, sizeof(err)) < 0);
-    CHECK(mc_import_prepare("10000000/PPSA01234/..", 0, staged, sizeof(staged), title, sizeof(title),
+    CHECK(mc_import_prepare("10000000/PPSA01234/..", -1, 0, staged, sizeof(staged), title, sizeof(title),
                             err, sizeof(err)) < 0);
-    CHECK(mc_import_prepare("10000000/../sdimg_SAVE0001", 0, staged, sizeof(staged), title,
+    CHECK(mc_import_prepare("10000000/../sdimg_SAVE0001", -1, 0, staged, sizeof(staged), title,
                             sizeof(title), err, sizeof(err)) < 0);
-    CHECK(mc_import_prepare("10000000/PPSA01234/a/b", 0, staged, sizeof(staged), title, sizeof(title),
+    CHECK(mc_import_prepare("10000000/PPSA01234/a/b", -1, 0, staged, sizeof(staged), title, sizeof(title),
                             err, sizeof(err)) < 0);
-    CHECK(mc_import_prepare("10000000/PPSA01234/sdimg_SAVE0001.prev", 0, staged, sizeof(staged),
+    CHECK(mc_import_prepare("10000000/PPSA01234/sdimg_SAVE0001.prev", -1, 0, staged, sizeof(staged),
                             title, sizeof(title), err, sizeof(err)) < 0);
     CHECK(strstr(call("POST", "/api/mc/delete?id=..%2F..%2Fhome%2Fx", NULL), "error"));
     CHECK(strstr(call("POST", "/api/mc/delete?id=10000000%2FPPSA01234%2F..", NULL), "error"));
@@ -350,7 +350,7 @@ int main(void) {
     put(P("usb0/memcard/10000000/PPSA09999/MYSAVE/data.bin"), "payload", 7, t0);
     card = call("GET", "/api/mc/card", NULL);
     CHECK(strstr(card, "\"id\":\"10000000/PPSA09999/MYSAVE\"") && strstr(card, "\"format\":\"folder\""));
-    CHECK(mc_import_prepare("10000000/PPSA09999/MYSAVE", 0, staged, sizeof(staged), title,
+    CHECK(mc_import_prepare("10000000/PPSA09999/MYSAVE", -1, 0, staged, sizeof(staged), title,
                             sizeof(title), err, sizeof(err)) == 0);
     CHECK(same(P("data/import/PPSA09999/MYSAVE/sce_sys/param.sfo"), "sfo", 3));
     CHECK(same(P("data/import/PPSA09999/MYSAVE/data.bin"), "payload", 7));
@@ -362,7 +362,158 @@ int main(void) {
     call("POST", "/api/mc/settings", "{\"usb\":1}");
     mc_tick();
     CHECK(there(P("usb1/memcard/10000000/PPSA01234/sdimg_SAVE0001")));
-    CHECK(strstr(call("GET", "/api/mc/status", NULL), "\"usb\":1,\"path\""));
+    st = call("GET", "/api/mc/status", NULL);
+    CHECK(strstr(st, "{\"usb\":1,\"card\":true") && strstr(st, "{\"usb\":0,\"card\":false"));
+    CHECK(strstr(st, "memory card removed from usb0") && strstr(st, "\"count\":1"));
+
+#define SAVEID "uid=10000000&title=PPSA01234&save=sdimg_SAVE0001"
+#define ONCARD(n) P("usb%d/memcard/10000000/PPSA01234/sdimg_SAVE0001", n)
+    printf("14. two memory cards: every save goes to both\n");
+    call("POST", "/api/mc/settings", "{\"usb\":-1}");
+    mc_tick();
+    st = call("GET", "/api/mc/status", NULL);
+    CHECK(strstr(st, "{\"usb\":0,\"card\":true") && strstr(st, "{\"usb\":1,\"card\":true"));
+    CHECK(strstr(st, "\"count\":2"));
+    before = g_notifications;
+    g_clock += 10;
+    put(P("home/" SAVE1), "\x02ps5-save-v6!", 13, g_clock);
+    g_clock += 10;
+    mc_tick();
+    CHECK(same(ONCARD(0), "\x02ps5-save-v6!", 13));
+    CHECK(same(ONCARD(1), "\x02ps5-save-v6!", 13));
+    CHECK(g_notifications == before + 1); /* one save, one popup, however many cards */
+    st = call("GET", "/api/mc/status", NULL);
+    CHECK(strstr(st, "sdimg_SAVE0001 -> usb0") && strstr(st, "sdimg_SAVE0001 -> usb1"));
+    CHECK(strstr(st, "\"console_saves\":3,\"synced\":3,\"waiting\":0"));
+    char *con = call("GET", "/api/mc/console", NULL);
+    CHECK(strstr(con, "\"cards\":[{\"usb\":0,\"state\":\"synced\""));
+    CHECK(strstr(con, ",{\"usb\":1,\"state\":\"synced\""));
+    card = call("GET", "/api/mc/card", NULL);
+    CHECK(strstr(card, "{\"usb\":0,\"id\":\"10000000/PPSA01234/sdimg_SAVE0001\""));
+    CHECK(strstr(card, "{\"usb\":1,\"id\":\"10000000/PPSA01234/sdimg_SAVE0001\""));
+    CHECK(!strstr(call("GET", "/api/mc/card?usb=1", NULL), "{\"usb\":0,\"id\""));
+
+    printf("15. a blank third drive is left alone until it is made a card\n");
+    mkdirs(P("usb2"));
+    mkdirs(P("usb3"));
+    g_mounted[2] = 1;
+    mc_tick();
+    CHECK(!there(P("usb2/memcard")));
+    CHECK(strstr(call("GET", "/api/mc/status", NULL), "{\"usb\":2,\"card\":false"));
+    CHECK(strstr(call("POST", "/api/mc/card_init?usb=5", NULL), "No drive is connected"));
+    CHECK(strstr(call("POST", "/api/mc/card_init", NULL), "error"));
+    CHECK(strstr(call("POST", "/api/mc/card_init?usb=2", NULL), "\"ok\":true"));
+    mc_tick();
+    CHECK(same(ONCARD(2), "\x02ps5-save-v6!", 13));
+    CHECK(there(P("usb2/memcard/10000000/CUSA00001/PS4SAVE.bin")));
+    CHECK(there(P("usb2/memcard/index.tsv")));
+    CHECK(strstr(call("GET", "/api/mc/status", NULL), "\"count\":3"));
+
+    printf("16. a manual backup can target one card\n");
+    call("POST", "/api/mc/settings", "{\"enabled\":false}");
+    g_clock += 10;
+    put(P("home/" SAVE1), "\x02ps5-save-v7!", 13, g_clock);
+    g_clock += 10;
+    mc_tick();
+    CHECK(same(ONCARD(1), "\x02ps5-save-v6!", 13));
+    CHECK(strstr(call("POST", "/api/mc/backup?usb=5&" SAVEID, NULL), "usb5 is not a memory card"));
+    CHECK(strstr(call("POST", "/api/mc/backup?usb=9&" SAVEID, NULL), "Invalid"));
+    CHECK(strstr(call("POST", "/api/mc/backup?usb=x&" SAVEID, NULL), "Invalid"));
+    CHECK(strstr(call("POST", "/api/mc/backup?usb=1&" SAVEID, NULL), "\"queued\":true"));
+    mc_tick();
+    CHECK(same(ONCARD(1), "\x02ps5-save-v7!", 13));
+    CHECK(same(ONCARD(0), "\x02ps5-save-v6!", 13));
+    CHECK(same(ONCARD(2), "\x02ps5-save-v6!", 13));
+    con = call("GET", "/api/mc/console", NULL);
+    CHECK(strstr(con, "\"state\":\"pending\",\"backed_at\"")); /* overall: the card furthest behind */
+    CHECK(strstr(con, "{\"usb\":0,\"state\":\"pending\"") && strstr(con, "{\"usb\":1,\"state\":\"synced\""));
+    st = call("GET", "/api/mc/status", NULL);
+    CHECK(strstr(st, "\"console_saves\":3,\"synced\":2,\"waiting\":1"));
+
+    printf("17. import and delete act on the card that was named\n");
+    CHECK(mc_import_prepare("10000000/PPSA01234/sdimg_SAVE0001", 1, 0, staged, sizeof(staged), title,
+                            sizeof(title), err, sizeof(err)) == 0);
+    CHECK(same(staged, "\x02ps5-save-v7!", 13));
+    CHECK(mc_import_prepare("10000000/PPSA01234/sdimg_SAVE0001", 0, 0, staged, sizeof(staged), title,
+                            sizeof(title), err, sizeof(err)) == 0);
+    CHECK(same(staged, "\x02ps5-save-v6!", 13));
+    CHECK(mc_import_prepare("10000000/PPSA01234/sdimg_SAVE0001", 5, 0, staged, sizeof(staged), title,
+                            sizeof(title), err, sizeof(err)) < 0);
+    CHECK(mc_import_prepare("10000000/PPSA01234/sdimg_SAVE0001", 42, 0, staged, sizeof(staged), title,
+                            sizeof(title), err, sizeof(err)) < 0);
+    /* the folder from step 12 only exists on usb0: without a card it is found there */
+    CHECK(mc_import_prepare("10000000/PPSA09999/MYSAVE", -1, 0, staged, sizeof(staged), title,
+                            sizeof(title), err, sizeof(err)) == 0);
+    CHECK(mc_import_prepare("10000000/PPSA09999/MYSAVE", 1, 0, staged, sizeof(staged), title,
+                            sizeof(title), err, sizeof(err)) < 0);
+    mc_import_cleanup();
+    CHECK(strstr(call("POST", "/api/mc/delete?usb=2&id=10000000%2FPPSA01234%2Fsdimg_SAVE0001", NULL), "\"ok\":true"));
+    CHECK(!there(ONCARD(2)) && there(ONCARD(0)) && there(ONCARD(1)));
+    CHECK(!strstr(slurp(P("usb2/memcard/index.tsv"), &n), "10000000\tPPSA01234\tsdimg_SAVE0001"));
+    CHECK(strstr(slurp(P("usb1/memcard/index.tsv"), &n), "10000000\tPPSA01234\tsdimg_SAVE0001"));
+    CHECK(strstr(call("POST", "/api/mc/delete?usb=5&id=10000000%2FPPSA01234%2Fsdimg_SAVE0001", NULL), "error"));
+
+    printf("18. a card keeps its name, wherever it is plugged in\n");
+    CHECK(strstr(call("POST", "/api/mc/label?usb=1&name=Travel%20card", NULL), "\"ok\":true"));
+    CHECK(same(P("usb1/memcard/label.txt"), "Travel card", 11));
+    CHECK(strstr(call("GET", "/api/mc/status", NULL), "{\"usb\":1,\"card\":true,\"label\":\"Travel card\""));
+    CHECK(strstr(call("POST", "/api/mc/label?usb=5&name=x", NULL), "error"));
+    CHECK(strstr(call("POST", "/api/mc/label?usb=2&name=%0A%20evil%09name%20", NULL), "\"ok\":true"));
+    CHECK(same(P("usb2/memcard/label.txt"), "evilname", 8));
+    CHECK(strstr(call("POST", "/api/mc/label?usb=2&name=", NULL), "\"ok\":true"));
+    CHECK(!there(P("usb2/memcard/label.txt")));
+    g_mounted[1] = 0;
+    mc_tick();
+    CHECK(strstr(call("GET", "/api/mc/status", NULL), "\"count\":2"));
+    g_mounted[1] = 1;
+    call("POST", "/api/mc/settings", "{\"enabled\":true}");
+    mc_tick();
+    st = call("GET", "/api/mc/status", NULL);
+    CHECK(strstr(st, "\"label\":\"Travel card\"") && strstr(st, "\"count\":3"));
+    CHECK(same(ONCARD(0), "\x02ps5-save-v7!", 13) && same(ONCARD(2), "\x02ps5-save-v7!", 13));
+    g_clock += 10;
+    put(P("home/" SAVE1), "\x02ps5-save-v8!", 13, g_clock);
+    g_clock += 10;
+    mc_tick();
+    CHECK(strstr(call("GET", "/api/mc/status", NULL), "sdimg_SAVE0001 -> Travel card (usb1)"));
+    CHECK(!strstr(call("GET", "/api/mc/card", NULL), "label.txt"));
+
+    printf("19. with \"every drive\" on, a blank drive becomes a card by itself\n");
+    g_mounted[3] = 1;
+    mc_tick();
+    CHECK(!there(P("usb3/memcard")));
+    set = call("POST", "/api/mc/settings", "{\"all_drives\":true}");
+    CHECK(strstr(set, "\"all_drives\":true"));
+    mc_tick();
+    CHECK(same(ONCARD(3), "\x02ps5-save-v8!", 13));
+    CHECK(strstr(slurp(cfg, &n), "\"all_drives\":true"));
+    call("POST", "/api/mc/settings", "{\"all_drives\":false}");
+
+    printf("20. pulling one card does not stop the others, and it catches up later\n");
+    g_mounted[0] = 0;
+    g_clock += 10;
+    put(P("home/" SAVE1), "\x02ps5-save-v9!", 13, g_clock);
+    g_clock += 10;
+    mc_tick();
+    CHECK(same(ONCARD(1), "\x02ps5-save-v9!", 13) && same(ONCARD(2), "\x02ps5-save-v9!", 13) &&
+          same(ONCARD(3), "\x02ps5-save-v9!", 13));
+    CHECK(same(ONCARD(0), "\x02ps5-save-v8!", 13));
+    st = call("GET", "/api/mc/status", NULL);
+    CHECK(strstr(st, "\"count\":3") && strstr(st, "\"console_saves\":3,\"synced\":3,\"waiting\":0"));
+    CHECK(!strstr(call("GET", "/api/mc/card", NULL), "{\"usb\":0,\"id\""));
+    g_mounted[0] = 1;
+    mc_tick();
+    CHECK(same(ONCARD(0), "\x02ps5-save-v9!", 13));
+    st = call("GET", "/api/mc/status", NULL);
+    CHECK(strstr(st, "\"count\":4") && strstr(st, "\"console_saves\":3,\"synced\":3,\"waiting\":0"));
+
+    printf("21. no card at all\n");
+    g_mounted[0] = g_mounted[1] = g_mounted[2] = g_mounted[3] = 0;
+    mc_tick();
+    st = call("GET", "/api/mc/status", NULL);
+    CHECK(strstr(st, "\"drives\":[]") && strstr(st, "\"present\":false,\"count\":0"));
+    CHECK(strstr(call("GET", "/api/mc/console", NULL), "\"state\":\"no_card\",\"backed_at\":0,\"cards\":[]"));
+    CHECK(strstr(call("POST", "/api/mc/backup?all=1", NULL), "No USB drive"));
 
     printf("%d checks, %d failed\n", g_checks, g_failures);
     if (!g_failures) {

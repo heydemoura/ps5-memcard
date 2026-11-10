@@ -7891,7 +7891,7 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
          return;
      }
 
-     /* memcard glue: POST /api/mc/import?id=<uid/TITLE/save>&uid=<hex>[&previous=1]
+     /* memcard glue: POST /api/mc/import?id=<uid/TITLE/save>&uid=<hex>[&usb=N][&previous=1]
       * Copies the card save to the staging dir, then hands it to Garlic's USB
       * importer below by rewriting the request. The card copy is never mounted
       * or modified. */
@@ -7902,6 +7902,10 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
          mc_url_param(url, "id", mc_id, sizeof(mc_id));
          mc_url_param(url, "uid", mc_uid, sizeof(mc_uid));
          mc_url_param(url, "previous", mc_prev, sizeof(mc_prev));
+         char mc_usb_arg[8];
+         int mc_usb = -1;
+         if (mc_url_param(url, "usb", mc_usb_arg, sizeof(mc_usb_arg)) && mc_usb_arg[0])
+             mc_usb = (mc_usb_arg[0] >= '0' && mc_usb_arg[0] <= '7' && !mc_usb_arg[1]) ? mc_usb_arg[0] - '0' : 99;
          int uid_ok = mc_uid[0] != 0 && strlen(mc_uid) <= 8;
          for (char *c = mc_uid; *c; c++) if (!isxdigit((unsigned char)*c)) uid_ok = 0;
          char home[MAX_PATH_LEN];
@@ -7913,7 +7917,7 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
          if (g_mounted && unmount_save() < 0) {
              http_json(sock, "{\"error\":\"A previous save mount could not be released; restart the payload\"}"); return;
          }
-         if (mc_import_prepare(mc_id, strcmp(mc_prev, "1") == 0, staged, sizeof(staged),
+         if (mc_import_prepare(mc_id, mc_usb, strcmp(mc_prev, "1") == 0, staged, sizeof(staged),
                                mc_title, sizeof(mc_title), mc_err, sizeof(mc_err)) < 0) {
              json_escape(mc_err, mc_esc, sizeof(mc_esc));
              snprintf(mc_json, sizeof(mc_json), "{\"error\":\"%s\"}", mc_esc);
@@ -7932,7 +7936,7 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
              mc_import_cleanup();
              http_json(sock, "{\"error\":\"The staged save was not found\"}"); return;
          }
-         logprintf("[memcard] import %s -> user %s (staged %s)\n", mc_id, mc_uid, staged);
+         logprintf("[memcard] import %s (usb %d) -> user %s (staged %s)\n", mc_id, mc_usb, mc_uid, staged);
          g_mc_import.active = 1;
          g_mc_import.thread = pthread_self();
          snprintf(g_mc_import.id, sizeof(g_mc_import.id), "%s", mc_id);

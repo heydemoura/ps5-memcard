@@ -19,6 +19,7 @@
 #define MC_PREV_SUFFIX ".prev"
 #define MC_INDEX_NAME "index.tsv"
 #define MC_PROFILE_NAME "profile.txt"
+#define MC_LABEL_NAME "label.txt"
 #define MC_ACTIVITY_MAX 60
 #define MC_RETRY_SECONDS 60
 #define MC_FREE_MARGIN (8ull * 1024 * 1024)
@@ -33,7 +34,8 @@ typedef struct {
     int keep_previous;
     int notify;
     int include_system_backups; /* sdimg_sce_bu_* copies the system keeps itself */
-    int usb;                    /* -1 = first drive found */
+    int usb;                    /* -1 = every memory card, N = only the drive on usbN */
+    int all_drives;             /* treat every connected drive as a memory card */
 } mc_config_t;
 
 typedef struct {
@@ -72,7 +74,25 @@ typedef struct {
     char uid[16];
     char title[32];
     char name[128];
+    int usb; /* -1 = every card */
 } mc_request_t;
+
+/* One USB port. A connected drive is a memory card when it is "present" here. */
+typedef struct {
+    int present;
+    char path[MC_PATH]; /* <usb>/memcard */
+    char label[48];
+    mc_index_t *index;
+    int index_n, index_cap;
+    int synced, waiting; /* console saves, as of the last pass */
+} mc_card_t;
+
+/* A card as seen by code that works outside the state lock. */
+typedef struct {
+    int usb;
+    char path[MC_PATH];
+    char label[48];
+} mc_slot_t;
 
 typedef struct {
     char title[32];
@@ -98,23 +118,21 @@ typedef struct {
 /* ── State ──────────────────────────────────────────────────────── */
 
 static mc_env_t g_env;
-/* g_io serialises everything that writes the card or the staging dir.
- * g_st guards the in-memory state below. Order: g_io, then g_st.
- * Environment callbacks are never called with either lock held. */
+/* g_io serialises everything that writes a card or the staging dir.
+ * g_st guards the in-memory state below. g_refresh keeps two drive scans from
+ * interleaving. Order: g_refresh, g_io, g_st.
+ * Environment callbacks are never called with g_io or g_st held. */
+static pthread_mutex_t g_refresh = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_io = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_st = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_wake = PTHREAD_COND_INITIALIZER;
 static int g_wake_pending;
 
-static mc_config_t g_cfg = {1, 5, 15, 300, 1, 1, 0, -1};
+static mc_config_t g_cfg = {1, 5, 15, 300, 1, 1, 0, -1, 0};
 
-static char g_card[MC_PATH]; /* <usb>/memcard, empty when no drive */
-static int g_card_usb = -1;
-static uint64_t g_card_free, g_card_total;
-
-static mc_index_t *g_index;
-static int g_index_n, g_index_cap;
-static char g_index_card[MC_PATH];
+static mc_card_t g_cards[MC_MAX_USB]; /* by usb port */
+static int g_drive[MC_MAX_USB];       /* a drive is connected there, card or not */
+static uint64_t g_drive_free[MC_MAX_USB], g_drive_total[MC_MAX_USB];
 
 static mc_pending_t *g_pending;
 static int g_pending_n, g_pending_cap;
@@ -135,6 +153,7 @@ static int g_console_n, g_synced_n, g_waiting_n;
 static struct {
     int active;
     int manual;
+    int usb;
     char uid[16], title[32], name[128];
     uint64_t done, total;
 } g_job;
@@ -563,6 +582,7 @@ static void config_clamp(mc_config_t *c) {
     if (c->settle_seconds > 600) c->settle_seconds = 600;
     if (c->min_interval_seconds < 0) c->min_interval_seconds = 0;
     if (c->min_interval_seconds > 86400) c->min_interval_seconds = 86400;
+    c->all_drives = !!c->all_drives;
     if (c->usb < -1 || c->usb >= MC_MAX_USB) c->usb = -1;
 }
 
@@ -575,6 +595,7 @@ static void config_parse(const char *json, mc_config_t *c) {
     json_int(json, "notify", &c->notify);
     json_int(json, "include_system_backups", &c->include_system_backups);
     json_int(json, "usb", &c->usb);
+    json_int(json, "all_drives", &c->all_drives);
     config_clamp(c);
 }
 
@@ -582,10 +603,11 @@ static void config_json(sb_t *sb, const mc_config_t *c) {
     sb_printf(sb,
               "{\"enabled\":%s,\"poll_seconds\":%d,\"settle_seconds\":%d,"
               "\"min_interval_seconds\":%d,\"keep_previous\":%s,\"notify\":%s,"
-              "\"include_system_backups\":%s,\"usb\":%d}",
+              "\"include_system_backups\":%s,\"usb\":%d,\"all_drives\":%s}",
               c->enabled ? "true" : "false", c->poll_seconds, c->settle_seconds,
               c->min_interval_seconds, c->keep_previous ? "true" : "false",
-              c->notify ? "true" : "false", c->include_system_backups ? "true" : "false", c->usb);
+              c->notify ? "true" : "false", c->include_system_backups ? "true" : "false", c->usb,
+              c->all_drives ? "true" : "false");
 }
 
 static void config_load(void) {
@@ -625,38 +647,38 @@ static int config_save(const mc_config_t *c) {
     return 0;
 }
 
-/* ── Index (g_st held by the caller unless noted) ───────────────── */
+/* ── Index, one per card (g_st held by the caller unless noted) ──── */
 
-static mc_index_t *index_find(const char *uid, const char *title, const char *name) {
-    for (int i = 0; i < g_index_n; i++)
-        if (!strcmp(g_index[i].name, name) && !strcmp(g_index[i].title, title) &&
-            !strcmp(g_index[i].uid, uid))
-            return &g_index[i];
+static mc_index_t *index_find(mc_card_t *c, const char *uid, const char *title, const char *name) {
+    for (int i = 0; i < c->index_n; i++)
+        if (!strcmp(c->index[i].name, name) && !strcmp(c->index[i].title, title) &&
+            !strcmp(c->index[i].uid, uid))
+            return &c->index[i];
     return NULL;
 }
 
-static mc_index_t *index_put(const mc_index_t *e) {
-    mc_index_t *old = index_find(e->uid, e->title, e->name);
+static mc_index_t *index_put(mc_card_t *c, const mc_index_t *e) {
+    mc_index_t *old = index_find(c, e->uid, e->title, e->name);
     if (old) {
         *old = *e;
         return old;
     }
-    if (g_index_n >= g_index_cap) {
-        int cap = g_index_cap ? g_index_cap * 2 : 64;
-        mc_index_t *p = realloc(g_index, (size_t)cap * sizeof(*p));
+    if (c->index_n >= c->index_cap) {
+        int cap = c->index_cap ? c->index_cap * 2 : 64;
+        mc_index_t *p = realloc(c->index, (size_t)cap * sizeof(*p));
         if (!p) return NULL;
-        g_index = p;
-        g_index_cap = cap;
+        c->index = p;
+        c->index_cap = cap;
     }
-    g_index[g_index_n] = *e;
-    return &g_index[g_index_n++];
+    c->index[c->index_n] = *e;
+    return &c->index[c->index_n++];
 }
 
-static void index_remove(const char *uid, const char *title, const char *name) {
-    mc_index_t *e = index_find(uid, title, name);
+static void index_remove(mc_card_t *c, const char *uid, const char *title, const char *name) {
+    mc_index_t *e = index_find(c, uid, title, name);
     if (!e) return;
-    *e = g_index[g_index_n - 1];
-    g_index_n--;
+    *e = c->index[c->index_n - 1];
+    c->index_n--;
 }
 
 static void tsv_clean(char *s) {
@@ -677,11 +699,10 @@ static char *tsv_next(char **cursor) {
     return s;
 }
 
-static void index_load(const char *card) {
-    g_index_n = 0;
-    snprintf(g_index_card, sizeof(g_index_card), "%s", card);
-    char path[MC_PATH];
-    snprintf(path, sizeof(path), "%s/%s", card, MC_INDEX_NAME);
+static void index_load(mc_card_t *c) {
+    c->index_n = 0;
+    char path[MC_PATH + 32];
+    snprintf(path, sizeof(path), "%s/%s", c->path, MC_INDEX_NAME);
     FILE *f = fopen(path, "rb");
     if (!f) return;
     char line[1024];
@@ -706,21 +727,21 @@ static void index_load(const char *card) {
         if (!id_ok(e.uid, sizeof(e.uid)) || !id_ok(e.title, sizeof(e.title)) ||
             !component_ok(e.name, sizeof(e.name)))
             continue;
-        index_put(&e);
+        index_put(c, &e);
     }
     fclose(f);
 }
 
-static int index_save(void) {
-    if (!g_index_card[0]) return -1;
-    char path[MC_PATH], tmp[MC_PATH];
-    snprintf(path, sizeof(path), "%s/%s", g_index_card, MC_INDEX_NAME);
+static int index_save(mc_card_t *c) {
+    if (!c->present) return -1;
+    char path[MC_PATH + 32], tmp[MC_PATH + 48];
+    snprintf(path, sizeof(path), "%s/%s", c->path, MC_INDEX_NAME);
     snprintf(tmp, sizeof(tmp), "%s%s", path, MC_TMP_SUFFIX);
     FILE *f = fopen(tmp, "wb");
     if (!f) return -1;
     fprintf(f, "#ps5-memcard-index v1\tuid\ttitle\tsave\tsize\tmtime\thash\tbacked_at\tps4\ttitle_name\tmain_title\tsub_title\n");
-    for (int i = 0; i < g_index_n; i++) {
-        mc_index_t *e = &g_index[i];
+    for (int i = 0; i < c->index_n; i++) {
+        mc_index_t *e = &c->index[i];
         fprintf(f, "%s\t%s\t%s\t%llu\t%lld\t%016llx\t%lld\t%d\t%s\t%s\t%s\n", e->uid, e->title,
                 e->name, (unsigned long long)e->size, (long long)e->mtime,
                 (unsigned long long)e->hash, (long long)e->backed_at, e->is_ps4, e->title_name,
@@ -854,32 +875,138 @@ static int usb_root(int n, char *out, size_t size) {
     return g_env.is_mounted ? g_env.is_mounted(out) : 1;
 }
 
-/* Picks the drive: the configured port, else a drive that already has a
- * memcard folder, else the first one mounted. Returns the usb number or -1. */
-static int find_card(int wanted, char *card, size_t size) {
-    char root[MC_PATH];
-    card[0] = 0;
-    if (wanted >= 0) {
-        if (!usb_root(wanted, root, sizeof(root))) return -1;
-        snprintf(card, size, "%s/%s", root, MC_CARD_DIR);
-        return wanted;
+static void card_key(int usb, const mc_save_t *s, char *key, size_t size) {
+    snprintf(key, size, "%d:%s/%s/%s", usb, s->uid, s->title, s->name);
+}
+
+/* g_st held. */
+static void pending_drop_card(int usb) {
+    char prefix[8];
+    int n = snprintf(prefix, sizeof(prefix), "%d:", usb);
+    for (int i = 0; i < g_pending_n;) {
+        if (!strncmp(g_pending[i].key, prefix, (size_t)n)) g_pending[i] = g_pending[--g_pending_n];
+        else i++;
     }
-    int first = -1;
+}
+
+static void label_clean(char *s) {
+    char *w = s;
+    for (char *r = s; *r; r++) {
+        unsigned char c = (unsigned char)*r;
+        if (c < 0x20 || c == 0x7f) continue;
+        if (w == s && c == ' ') continue;
+        *w++ = (char)c;
+    }
+    *w = 0;
+    while (w > s && w[-1] == ' ') *--w = 0;
+}
+
+static void read_label(const char *card, char *out, size_t size) {
+    out[0] = 0;
+    char path[MC_PATH + 32];
+    snprintf(path, sizeof(path), "%s/%s", card, MC_LABEL_NAME);
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    size_t n = fread(out, 1, size - 1, f);
+    out[n] = 0;
+    fclose(f);
+    label_clean(out);
+}
+
+/* Which mounted drives are memory cards right now:
+ *  - the settings pin one port: only that drive;
+ *  - "every drive" is on: all of them;
+ *  - otherwise every drive that already has a memcard folder, and when no
+ *    drive has one the first drive becomes the card.
+ * Returns how many cards there are. */
+static int cards_refresh(void) {
+    pthread_mutex_lock(&g_refresh);
+    pthread_mutex_lock(&g_st);
+    int pin = g_cfg.usb, all = g_cfg.all_drives;
+    int was[MC_MAX_USB];
+    for (int n = 0; n < MC_MAX_USB; n++) was[n] = g_cards[n].present;
+    pthread_mutex_unlock(&g_st);
+
+    int mounted[MC_MAX_USB] = {0}, has[MC_MAX_USB] = {0}, want[MC_MAX_USB] = {0};
+    static char path[MC_MAX_USB][MC_PATH]; /* guarded by g_refresh */
+    char label[MC_MAX_USB][48];
+    uint64_t free_b[MC_MAX_USB] = {0}, total_b[MC_MAX_USB] = {0};
+    int first = -1, any = 0;
     for (int n = 0; n < MC_MAX_USB; n++) {
-        if (!usb_root(n, root, sizeof(root))) continue;
-        char probe[MC_PATH];
-        snprintf(probe, sizeof(probe), "%s/%s", root, MC_CARD_DIR);
+        char root[MC_PATH - 16];
+        label[n][0] = 0;
+        mounted[n] = usb_root(n, root, sizeof(root));
+        if (!mounted[n]) continue;
+        snprintf(path[n], MC_PATH, "%s/%s", root, MC_CARD_DIR);
         struct stat st;
-        if (stat(probe, &st) == 0 && S_ISDIR(st.st_mode)) {
-            snprintf(card, size, "%s", probe);
-            return n;
-        }
+        has[n] = stat(path[n], &st) == 0 && S_ISDIR(st.st_mode);
+        any |= has[n];
         if (first < 0) first = n;
+        if (g_env.space) g_env.space(root, &free_b[n], &total_b[n]);
     }
-    if (first < 0) return -1;
-    snprintf(root, sizeof(root), g_env.usb_fmt, first);
-    snprintf(card, size, "%s/%s", root, MC_CARD_DIR);
-    return first;
+    if (pin >= 0) {
+        want[pin] = mounted[pin];
+    } else {
+        for (int n = 0; n < MC_MAX_USB; n++) want[n] = mounted[n] && (all || has[n]);
+        if (!all && !any && first >= 0) want[first] = 1;
+    }
+    int changed = 0, count = 0;
+    for (int n = 0; n < MC_MAX_USB; n++) {
+        /* A card always has its folder, so it stays a card when a second one shows up. */
+        if (want[n] && !has[n]) mkdir(path[n], 0777);
+        if (want[n]) read_label(path[n], label[n], sizeof(label[n]));
+        if (want[n] != was[n]) changed = 1;
+        count += want[n];
+    }
+
+    int appeared[MC_MAX_USB] = {0}, vanished[MC_MAX_USB] = {0}, indexed[MC_MAX_USB] = {0};
+    if (changed) pthread_mutex_lock(&g_io); /* nobody mid-copy while an index is swapped */
+    pthread_mutex_lock(&g_st);
+    for (int n = 0; n < MC_MAX_USB; n++) {
+        mc_card_t *c = &g_cards[n];
+        g_drive[n] = mounted[n];
+        g_drive_free[n] = free_b[n];
+        g_drive_total[n] = total_b[n];
+        if (want[n] && !c->present) {
+            c->present = 1;
+            snprintf(c->path, sizeof(c->path), "%s", path[n]);
+            index_load(c);
+            c->synced = c->waiting = 0;
+            appeared[n] = 1;
+            indexed[n] = c->index_n;
+        } else if (!want[n] && c->present) {
+            c->present = 0;
+            c->index_n = 0;
+            c->synced = c->waiting = 0;
+            pending_drop_card(n);
+            vanished[n] = 1;
+        }
+        if (want[n]) snprintf(c->label, sizeof(c->label), "%s", label[n]);
+    }
+    pthread_mutex_unlock(&g_st);
+    if (changed) pthread_mutex_unlock(&g_io);
+    pthread_mutex_unlock(&g_refresh);
+
+    for (int n = 0; n < MC_MAX_USB; n++) {
+        if (appeared[n]) event_add("card", "memory card ready on usb%d (%d saves indexed)", n, indexed[n]);
+        if (vanished[n]) event_add("card", "memory card removed from usb%d", n);
+    }
+    return count;
+}
+
+/* The cards as of now, for work done outside the state lock. */
+static int cards_snapshot(mc_slot_t *out) {
+    int count = 0;
+    pthread_mutex_lock(&g_st);
+    for (int n = 0; n < MC_MAX_USB; n++) {
+        if (!g_cards[n].present) continue;
+        out[count].usb = n;
+        snprintf(out[count].path, sizeof(out[count].path), "%s", g_cards[n].path);
+        snprintf(out[count].label, sizeof(out[count].label), "%s", g_cards[n].label);
+        count++;
+    }
+    pthread_mutex_unlock(&g_st);
+    return count;
 }
 
 static void card_root_of(const char *card, char *root, size_t size) {
@@ -888,55 +1015,12 @@ static void card_root_of(const char *card, char *root, size_t size) {
     if (slash) *slash = 0;
 }
 
-/* Refresh g_card. Returns 1 when a card is available. */
-static int card_refresh(void) {
-    pthread_mutex_lock(&g_st);
-    int wanted = g_cfg.usb;
-    char previous[MC_PATH];
-    snprintf(previous, sizeof(previous), "%s", g_card);
-    pthread_mutex_unlock(&g_st);
-
-    char card[MC_PATH];
-    int usb = find_card(wanted, card, sizeof(card));
-    uint64_t free_b = 0, total_b = 0;
-    if (usb >= 0 && g_env.space) {
-        char root[MC_PATH];
-        card_root_of(card, root, sizeof(root));
-        g_env.space(root, &free_b, &total_b);
-    }
-
-    int changed = strcmp(previous, card) != 0;
-    if (changed) pthread_mutex_lock(&g_io); /* nobody mid-copy while the index is swapped */
-    pthread_mutex_lock(&g_st);
-    snprintf(g_card, sizeof(g_card), "%s", card);
-    g_card_usb = usb;
-    g_card_free = free_b;
-    g_card_total = total_b;
-    if (changed) {
-        g_pending_n = 0;
-        if (card[0]) index_load(card);
-        else {
-            g_index_n = 0;
-            g_index_card[0] = 0;
-        }
-    }
-    int count = g_index_n;
-    pthread_mutex_unlock(&g_st);
-    if (changed) {
-        pthread_mutex_unlock(&g_io);
-        if (card[0]) event_add("card", "memory card ready on usb%d (%d saves indexed)", usb, count);
-        else event_add("card", "memory card removed");
-    }
-    return card[0] != 0;
+static void slot_name(const mc_slot_t *slot, char *out, size_t size) {
+    if (slot->label[0]) snprintf(out, size, "%s (usb%d)", slot->label, slot->usb);
+    else snprintf(out, size, "usb%d", slot->usb);
 }
 
-static void card_get(char *card, size_t size) {
-    pthread_mutex_lock(&g_st);
-    snprintf(card, size, "%s", g_card);
-    pthread_mutex_unlock(&g_st);
-}
-
-/* ── Backup of one save ─────────────────────────────────────────── */
+/* ── Backup of one save to one card ─────────────────────────────── */
 
 static void ps4_bin_name(const char *save_name, char *out, size_t size) {
     snprintf(out, size, "%s.bin", !strncmp(save_name, "sdimg_", 6) ? save_name + 6 : save_name);
@@ -944,7 +1028,7 @@ static void ps4_bin_name(const char *save_name, char *out, size_t size) {
 
 static void write_profile(const char *card, const char *uid, const char *user) {
     if (!user[0]) return;
-    char path[MC_PATH], old[64] = {0};
+    char path[MC_PATH + 64], old[64] = {0};
     snprintf(path, sizeof(path), "%s/%s/%s", card, uid, MC_PROFILE_NAME);
     FILE *f = fopen(path, "rb");
     if (f) {
@@ -961,7 +1045,7 @@ static void write_profile(const char *card, const char *uid, const char *user) {
 
 static void read_profile(const char *card, const char *uid, char *out, size_t size) {
     out[0] = 0;
-    char path[MC_PATH];
+    char path[MC_PATH + 64];
     snprintf(path, sizeof(path), "%s/%s/%s", card, uid, MC_PROFILE_NAME);
     FILE *f = fopen(path, "rb");
     if (!f) return;
@@ -973,7 +1057,7 @@ static void read_profile(const char *card, const char *uid, char *out, size_t si
 
 /* Replace dst with tmp, keeping the old dst as .prev when asked. */
 static int publish(const char *tmp, const char *dst, int keep_previous) {
-    char prev[MC_PATH];
+    char prev[MC_PATH + 16];
     snprintf(prev, sizeof(prev), "%s%s", dst, MC_PREV_SUFFIX);
     int had = exists(dst);
     if (had) {
@@ -996,14 +1080,9 @@ static int publish(const char *tmp, const char *dst, int keep_previous) {
 }
 
 /* 0 = copied, 1 = the save changed while copying (try again later), -1 = error. */
-static int backup_one(const mc_save_t *s, const mc_config_t *cfg, int manual, char *err,
-                      size_t err_size) {
-    char card[MC_PATH];
-    card_get(card, sizeof(card));
-    if (!card[0]) {
-        snprintf(err, err_size, "no USB drive");
-        return -1;
-    }
+static int backup_one(const mc_save_t *s, const mc_slot_t *slot, const mc_config_t *cfg, int manual,
+                      char *err, size_t err_size) {
+    const char *card = slot->path;
 
     /* Descriptions come from callbacks, so fetch them before taking any lock. */
     mc_index_t e;
@@ -1029,9 +1108,9 @@ static int backup_one(const mc_save_t *s, const mc_config_t *cfg, int manual, ch
     int have_space = g_env.space && g_env.space(root, &free_b, &total_b) == 0;
 
     pthread_mutex_lock(&g_io);
-    char dir[MC_PATH], dst[MC_PATH], tmp[MC_PATH];
-    snprintf(dir, sizeof(dir), "%s/%s/%s", card, s->uid, s->title);
-    if (snprintf(dst, sizeof(dst), "%s/%s", dir, s->name) >= (int)sizeof(dst) - 16) {
+    char dir[MC_PATH], dst[MC_PATH], tmp[MC_PATH + 16];
+    if (snprintf(dir, sizeof(dir), "%s/%s/%s", card, s->uid, s->title) >= (int)sizeof(dir) ||
+        snprintf(dst, sizeof(dst), "%s/%s", dir, s->name) >= (int)sizeof(dst) - 16) {
         pthread_mutex_unlock(&g_io);
         snprintf(err, err_size, "path is too long");
         return -1;
@@ -1058,7 +1137,7 @@ static int backup_one(const mc_save_t *s, const mc_config_t *cfg, int manual, ch
     mkdirs(dir);
     if (!exists(dir)) {
         pthread_mutex_unlock(&g_io);
-        snprintf(err, err_size, "cannot create %s (is the drive writable?)", dir);
+        snprintf(err, err_size, "cannot create the folder on usb%d (is the drive writable?)", slot->usb);
         return -1;
     }
 
@@ -1066,6 +1145,7 @@ static int backup_one(const mc_save_t *s, const mc_config_t *cfg, int manual, ch
     memset(&g_job, 0, sizeof(g_job));
     g_job.active = 1;
     g_job.manual = manual;
+    g_job.usb = slot->usb;
     snprintf(g_job.uid, sizeof(g_job.uid), "%s", s->uid);
     snprintf(g_job.title, sizeof(g_job.title), "%s", s->title);
     snprintf(g_job.name, sizeof(g_job.name), "%s", s->name);
@@ -1074,7 +1154,7 @@ static int backup_one(const mc_save_t *s, const mc_config_t *cfg, int manual, ch
 
     int rc = copy_stream(s->path, tmp, &e.hash, 1, err, err_size);
 
-    char bin_src[MC_PATH] = {0}, bin_dst[MC_PATH] = {0}, bin_tmp[MC_PATH] = {0};
+    char bin_src[MC_PATH + 200] = {0}, bin_dst[MC_PATH + 200] = {0}, bin_tmp[MC_PATH + 216] = {0};
     int have_bin = 0;
     if (rc == 0 && s->is_ps4) {
         char bin[160], src_dir[MC_PATH];
@@ -1120,9 +1200,10 @@ static int backup_one(const mc_save_t *s, const mc_config_t *cfg, int manual, ch
         write_profile(card, s->uid, user);
         pthread_mutex_lock(&g_st);
         int saved = -1;
-        if (!strcmp(g_index_card, card)) {
-            index_put(&e);
-            saved = index_save();
+        mc_card_t *c = &g_cards[slot->usb];
+        if (c->present && !strcmp(c->path, card)) {
+            index_put(c, &e);
+            saved = index_save(c);
         }
         pthread_mutex_unlock(&g_st);
         if (saved < 0) mc_log("[memcard] warning: could not write %s/%s\n", card, MC_INDEX_NAME);
@@ -1137,7 +1218,7 @@ static int backup_one(const mc_save_t *s, const mc_config_t *cfg, int manual, ch
 
 /* ── Watcher pass ───────────────────────────────────────────────── */
 
-enum { MC_SYNCED, MC_MISSING, MC_PENDING, MC_CARD_NEWER, MC_NO_CARD };
+enum { MC_SYNCED, MC_CARD_NEWER, MC_PENDING, MC_MISSING, MC_NO_CARD }; /* ordered: worst last */
 
 static const char *state_name(int st) {
     switch (st) {
@@ -1176,15 +1257,22 @@ static void save_label(const mc_save_t *s, char *out, size_t size) {
 /* One console popup per pass, however many saves were copied in it. */
 typedef struct {
     int count;
+    const mc_save_t *last_save; /* a save copied to two cards still counts once */
     char last[320];
 } mc_tally_t;
 
-static void run_backup(const mc_save_t *s, const mc_config_t *cfg, int manual, const char *running,
-                       mc_tally_t *tally) {
-    char key[192], label[320], err[256] = {0};
-    snprintf(key, sizeof(key), "%s/%s/%s", s->uid, s->title, s->name);
-    save_label(s, label, sizeof(label));
-    int rc = backup_one(s, cfg, manual, err, sizeof(err));
+/* many: more than one card is in use, so the log says which one. */
+static void run_backup(const mc_save_t *s, const mc_slot_t *slot, const mc_config_t *cfg, int manual,
+                       const char *running, mc_tally_t *tally, int many) {
+    char key[200], label[400], err[256] = {0};
+    card_key(slot->usb, s, key, sizeof(key));
+    save_label(s, label, sizeof(label) - 80);
+    if (many) {
+        char where[72];
+        slot_name(slot, where, sizeof(where));
+        snprintf(label + strlen(label), 80, " -> %s", where);
+    }
+    int rc = backup_one(s, slot, cfg, manual, err, sizeof(err));
     int64_t mono = now_mono();
     pthread_mutex_lock(&g_st);
     if (rc == 0) {
@@ -1205,9 +1293,10 @@ static void run_backup(const mc_save_t *s, const mc_config_t *cfg, int manual, c
                   (double)s->size / 1048576.0);
         /* No popups over a game that is being played; manual runs always report. */
         int in_game = running[0] && !strcmp(running, s->title);
-        if (manual || !in_game) {
+        if ((manual || !in_game) && tally->last_save != s) {
             tally->count++;
-            snprintf(tally->last, sizeof(tally->last), "%s", label);
+            tally->last_save = s;
+            save_label(s, tally->last, sizeof(tally->last));
         }
     } else if (rc < 0) {
         event_add("error", "%s: %s", label, err);
@@ -1231,7 +1320,10 @@ void mc_tick(void) {
     mc_config_t cfg = g_cfg;
     pthread_mutex_unlock(&g_st);
 
-    int have_card = card_refresh();
+    cards_refresh();
+    mc_slot_t slots[MC_MAX_USB];
+    int slot_n = cards_snapshot(slots);
+    int many = slot_n > 1;
 
     /* Track the running game: when it closes, its saves get a content check. */
     char running[32] = {0};
@@ -1258,7 +1350,7 @@ void mc_tick(void) {
     mc_save_list_t list = {0};
     scan_console(&list, cfg.include_system_backups);
 
-    if (!have_card) {
+    if (!slot_n) {
         pthread_mutex_lock(&g_st);
         g_console_n = list.n;
         g_synced_n = 0;
@@ -1270,37 +1362,45 @@ void mc_tick(void) {
         return;
     }
 
-    char card[MC_PATH];
-    card_get(card, sizeof(card));
-
     mc_tally_t tally = {0};
     /* Manual requests first; they ignore settle time, throttling and "card is newer". */
-    char *done = calloc((size_t)list.n + 1, 1);
+    char *done = calloc((size_t)list.n * MC_MAX_USB + 1, 1); /* [save][usb] */
     for (int q = 0; q < queue_n && !stopping(); q++) {
-        int matched = 0, current = 0;
+        int matched = 0, current = 0, target = 0;
+        for (int k = 0; k < slot_n; k++)
+            if (queue[q].usb < 0 || queue[q].usb == slots[k].usb) target++;
+        if (!target) {
+            event_add("error", "manual backup: usb%d is not a memory card", queue[q].usb);
+            continue;
+        }
         for (int i = 0; i < list.n && !stopping(); i++) {
             mc_save_t *s = &list.v[i];
             if (!request_matches(&queue[q], s)) continue;
             matched = 1;
-            if (done && done[i]) continue;
-            if (done) done[i] = 1;
-            /* Copying an identical save again would only push the real
-             * previous generation out of its .prev slot. */
-            int on_card = card_file_exists(card, s);
-            pthread_mutex_lock(&g_st);
-            mc_index_t *ix = index_find(s->uid, s->title, s->name);
-            int same = classify(s, ix, on_card) == MC_SYNCED;
-            uint64_t want = ix ? ix->hash : 0, have = 0;
-            pthread_mutex_unlock(&g_st);
-            if (same && file_hash(s->path, &have) == 0 && have == want) {
-                current++;
-                continue;
+            for (int k = 0; k < slot_n && !stopping(); k++) {
+                mc_slot_t *slot = &slots[k];
+                if (queue[q].usb >= 0 && queue[q].usb != slot->usb) continue;
+                char *mark = done ? &done[i * MC_MAX_USB + slot->usb] : NULL;
+                if (mark && *mark) continue;
+                if (mark) *mark = 1;
+                /* Copying an identical save again would only push the real
+                 * previous generation out of its .prev slot. */
+                int on_card = card_file_exists(slot->path, s);
+                pthread_mutex_lock(&g_st);
+                mc_index_t *ix = index_find(&g_cards[slot->usb], s->uid, s->title, s->name);
+                int same = classify(s, ix, on_card) == MC_SYNCED;
+                uint64_t want = ix ? ix->hash : 0, have = 0;
+                pthread_mutex_unlock(&g_st);
+                if (same && file_hash(s->path, &have) == 0 && have == want) {
+                    current++;
+                    continue;
+                }
+                run_backup(s, slot, &cfg, 1, running, &tally, many);
             }
-            run_backup(s, &cfg, 1, running, &tally);
         }
         if (current)
-            event_add("info", "manual backup: %d save%s already up to date on the card", current,
-                      current == 1 ? "" : "s");
+            event_add("info", "manual backup: %d cop%s already up to date", current,
+                      current == 1 ? "y" : "ies");
         if (!matched)
             event_add("error", "manual backup: no console save matches %s/%s/%s",
                       queue[q].uid[0] ? queue[q].uid : "*", queue[q].title[0] ? queue[q].title : "*",
@@ -1322,68 +1422,87 @@ void mc_tick(void) {
     }
     pthread_mutex_unlock(&g_st);
 
+    int card_synced[MC_MAX_USB] = {0}, card_waiting[MC_MAX_USB] = {0};
     int synced = 0, waiting = 0;
     for (int i = 0; i < list.n && !stopping(); i++) {
         mc_save_t *s = &list.v[i];
-        int handled = done && done[i]; /* a manual run already dealt with it this pass */
-        char key[192];
-        snprintf(key, sizeof(key), "%s/%s/%s", s->uid, s->title, s->name);
-        int on_card = card_file_exists(card, s);
-        mono = now_mono();
-        wall = now_wall();
+        int everywhere = 1, behind = 0;
+        int deep = 0;
+        for (int d = 0; d < deep_n; d++)
+            if (!strcmp(deep_titles[d], s->title)) deep = 1;
+        uint64_t source_hash = 0;
+        int have_hash = 0;
 
-        pthread_mutex_lock(&g_st);
-        mc_index_t *ix = index_find(s->uid, s->title, s->name);
-        int st = classify(s, ix, on_card);
-        uint64_t ix_hash = ix ? ix->hash : 0;
-        int64_t ix_backed = ix ? ix->backed_at : 0;
-        int go = 0;
-        if (st == MC_SYNCED) {
-            pending_drop(key);
-        } else if (st != MC_CARD_NEWER && cfg.enabled && !handled) {
-            mc_pending_t *p = pending_get(key, 1);
-            if (p) {
-                if (p->size != s->size || p->mtime != s->mtime) {
-                    p->size = s->size;
-                    p->mtime = s->mtime;
-                    p->since = mono;
-                    p->retry_at = 0;
-                }
-                /* Stable when untouched for the settle time, by file time or by what we watched. */
-                int stable = (wall >= s->mtime && wall - s->mtime >= cfg.settle_seconds) ||
-                             mono - p->since >= cfg.settle_seconds;
-                int in_game = running[0] && !strcmp(running, s->title);
-                int throttled = in_game && ix_backed && wall >= ix_backed &&
-                                wall - ix_backed < cfg.min_interval_seconds;
-                go = stable && !throttled && (!p->retry_at || mono >= p->retry_at);
-            }
-        }
-        pthread_mutex_unlock(&g_st);
+        for (int k = 0; k < slot_n && !stopping(); k++) {
+            mc_slot_t *slot = &slots[k];
+            mc_card_t *c = &g_cards[slot->usb];
+            int handled = done && done[i * MC_MAX_USB + slot->usb]; /* a manual run dealt with it */
+            char key[200];
+            card_key(slot->usb, s, key, sizeof(key));
+            int on_card = card_file_exists(slot->path, s);
+            mono = now_mono();
+            wall = now_wall();
 
-        if (st == MC_SYNCED) {
-            int deep = 0;
-            for (int d = 0; d < deep_n; d++)
-                if (!strcmp(deep_titles[d], s->title)) deep = 1;
-            uint64_t h = 0;
-            /* Same size and time as the copy: after its game closed, compare the bytes too. */
-            if (deep && cfg.enabled && !handled && file_hash(s->path, &h) == 0 && h != ix_hash) {
-                mc_log("[memcard] %s changed without a new timestamp\n", key);
-                run_backup(s, &cfg, 0, running, &tally);
-            }
-            synced++;
-            continue;
-        }
-        if (go) {
-            run_backup(s, &cfg, 0, running, &tally);
             pthread_mutex_lock(&g_st);
-            mc_index_t *now_ix = index_find(s->uid, s->title, s->name);
-            int ok = now_ix && now_ix->size == s->size && now_ix->mtime == s->mtime;
+            mc_index_t *ix = index_find(c, s->uid, s->title, s->name);
+            int st = classify(s, ix, on_card);
+            uint64_t ix_hash = ix ? ix->hash : 0;
+            int64_t ix_backed = ix ? ix->backed_at : 0;
+            int go = 0;
+            if (st == MC_SYNCED) {
+                pending_drop(key);
+            } else if (st != MC_CARD_NEWER && cfg.enabled && !handled) {
+                mc_pending_t *p = pending_get(key, 1);
+                if (p) {
+                    if (p->size != s->size || p->mtime != s->mtime) {
+                        p->size = s->size;
+                        p->mtime = s->mtime;
+                        p->since = mono;
+                        p->retry_at = 0;
+                    }
+                    /* Stable when untouched for the settle time, by file time or by what we watched. */
+                    int stable = (wall >= s->mtime && wall - s->mtime >= cfg.settle_seconds) ||
+                                 mono - p->since >= cfg.settle_seconds;
+                    int in_game = running[0] && !strcmp(running, s->title);
+                    int throttled = in_game && ix_backed && wall >= ix_backed &&
+                                    wall - ix_backed < cfg.min_interval_seconds;
+                    go = stable && !throttled && (!p->retry_at || mono >= p->retry_at);
+                }
+            }
             pthread_mutex_unlock(&g_st);
-            if (ok) synced++;
-            else waiting++;
-        } else if (st != MC_CARD_NEWER) {
-            waiting++;
+
+            if (st == MC_SYNCED) {
+                /* Same size and time as the copy: after its game closed, compare the bytes too. */
+                if (deep && cfg.enabled && !handled) {
+                    if (!have_hash) have_hash = file_hash(s->path, &source_hash) == 0 ? 1 : -1;
+                    if (have_hash == 1 && source_hash != ix_hash) {
+                        mc_log("[memcard] %s changed without a new timestamp\n", key);
+                        run_backup(s, slot, &cfg, 0, running, &tally, many);
+                    }
+                }
+                card_synced[slot->usb]++;
+                continue;
+            }
+            int ok = 0;
+            if (go) {
+                run_backup(s, slot, &cfg, 0, running, &tally, many);
+                pthread_mutex_lock(&g_st);
+                mc_index_t *now_ix = index_find(c, s->uid, s->title, s->name);
+                ok = now_ix && now_ix->size == s->size && now_ix->mtime == s->mtime;
+                pthread_mutex_unlock(&g_st);
+            }
+            if (ok) {
+                card_synced[slot->usb]++;
+            } else {
+                everywhere = 0;
+                if (st != MC_CARD_NEWER) {
+                    card_waiting[slot->usb]++;
+                    behind = 1;
+                }
+            }
         }
+        if (everywhere) synced++;
+        else if (behind) waiting++;
     }
     free(done);
     if (tally.count && cfg.notify && g_env.notify) {
@@ -1397,6 +1516,10 @@ void mc_tick(void) {
     g_console_n = list.n;
     g_synced_n = synced;
     g_waiting_n = waiting;
+    for (int k = 0; k < slot_n; k++) {
+        g_cards[slots[k].usb].synced = card_synced[slots[k].usb];
+        g_cards[slots[k].usb].waiting = card_waiting[slots[k].usb];
+    }
     g_last_sweep = now_wall();
     pthread_mutex_unlock(&g_st);
     free(list.v);
@@ -1438,7 +1561,7 @@ void mc_wake(void) {
 }
 
 void mc_note_resume(void) {
-    /* The drive may have been re-enumerated while the console slept. */
+    /* The drives may have been re-enumerated while the console slept. */
     pthread_mutex_lock(&g_st);
     g_pending_n = 0;
     pthread_mutex_unlock(&g_st);
@@ -1465,7 +1588,7 @@ static void users_json(sb_t *sb) {
         while ((ue = readdir(home))) {
             if (!id_ok(ue->d_name, 16)) continue;
             char path[MC_PATH];
-            snprintf(path, sizeof(path), "%s/%s", g_env.home_root, ue->d_name);
+            snprintf(path, sizeof(path), "%s/%.15s", g_env.home_root, ue->d_name);
             struct stat st;
             if (stat(path, &st) < 0 || !S_ISDIR(st.st_mode)) continue;
             char name[64] = {0};
@@ -1495,23 +1618,32 @@ static char *http_status(void) {
     sb_str(&sb, g_env.version ? g_env.version : "");
     sb_put(&sb, ",\"users\":");
     users_json(&sb);
-    sb_put(&sb, ",\"drives\":[");
-    int first = 1;
-    for (int n = 0; n < MC_MAX_USB; n++) {
-        char root[MC_PATH];
-        if (!usb_root(n, root, sizeof(root))) continue;
-        sb_printf(&sb, "%s%d", first ? "" : ",", n);
-        first = 0;
-    }
-    sb_put(&sb, "]");
 
     pthread_mutex_lock(&g_st);
     sb_printf(&sb, ",\"now\":%lld", (long long)now_wall());
-    sb_put(&sb, ",\"card\":{");
-    sb_printf(&sb, "\"present\":%s,\"usb\":%d,\"path\":", g_card[0] ? "true" : "false", g_card_usb);
-    sb_str(&sb, g_card);
-    sb_printf(&sb, ",\"free\":%llu,\"total\":%llu,\"saves\":%d}", (unsigned long long)g_card_free,
-              (unsigned long long)g_card_total, g_index_n);
+    /* Every connected drive; "card" says whether it is used as a memory card. */
+    sb_put(&sb, ",\"drives\":[");
+    int first = 1, cards = 0, card_saves = 0;
+    for (int n = 0; n < MC_MAX_USB; n++) {
+        mc_card_t *c = &g_cards[n];
+        if (!g_drive[n] && !c->present) continue;
+        sb_printf(&sb, "%s{\"usb\":%d,\"card\":%s,\"label\":", first ? "" : ",", n,
+                  c->present ? "true" : "false");
+        first = 0;
+        sb_str(&sb, c->present ? c->label : "");
+        sb_put(&sb, ",\"path\":");
+        sb_str(&sb, c->present ? c->path : "");
+        sb_printf(&sb, ",\"free\":%llu,\"total\":%llu,\"saves\":%d,\"synced\":%d,\"waiting\":%d}",
+                  (unsigned long long)g_drive_free[n], (unsigned long long)g_drive_total[n],
+                  c->present ? c->index_n : 0, c->present ? c->synced : 0,
+                  c->present ? c->waiting : 0);
+        if (c->present) {
+            cards++;
+            card_saves += c->index_n;
+        }
+    }
+    sb_printf(&sb, "],\"card\":{\"present\":%s,\"count\":%d,\"saves\":%d}", cards ? "true" : "false",
+              cards, card_saves);
     sb_printf(&sb, ",\"watcher\":{\"enabled\":%s,\"last_sweep\":%lld,\"running_title\":",
               g_cfg.enabled ? "true" : "false", (long long)g_last_sweep);
     sb_str(&sb, running);
@@ -1519,8 +1651,8 @@ static char *http_status(void) {
     sb_str(&sb, running_name);
     sb_printf(&sb, ",\"console_saves\":%d,\"synced\":%d,\"waiting\":%d,\"queued\":%d}", g_console_n,
               g_synced_n, g_waiting_n, g_queue_n);
-    sb_printf(&sb, ",\"job\":{\"active\":%s,\"manual\":%s,\"uid\":", g_job.active ? "true" : "false",
-              g_job.manual ? "true" : "false");
+    sb_printf(&sb, ",\"job\":{\"active\":%s,\"manual\":%s,\"usb\":%d,\"uid\":",
+              g_job.active ? "true" : "false", g_job.manual ? "true" : "false", g_job.usb);
     sb_str(&sb, g_job.uid);
     sb_put(&sb, ",\"title\":");
     sb_str(&sb, g_job.title);
@@ -1545,56 +1677,48 @@ static char *http_status(void) {
     return sb_done(&sb);
 }
 
-/* ── HTTP: what is on the card ──────────────────────────────────── */
+/* ── HTTP: what is on the cards ─────────────────────────────────── */
 
 typedef struct {
+    int usb;
     char uid[16], title[32], name[128];
     int folder, is_ps4, has_prev;
     uint64_t size;
     int64_t mtime;
     char title_name[96];
+    char profile[64];
 } mc_card_item_t;
 
-static char *http_card(void) {
-    char card[MC_PATH];
-    card_get(card, sizeof(card));
-    sb_t sb = {0};
-    if (!card[0]) {
-        sb_put(&sb, "{\"present\":false,\"saves\":[]}");
-        return sb_done(&sb);
-    }
+typedef struct {
+    mc_card_item_t *v;
+    int n, cap;
+} mc_card_items_t;
 
-    mc_card_item_t *items = NULL;
-    int n = 0, cap = 0;
-    char profiles[32][2][64];
-    int profile_n = 0;
-
+static void scan_card(const mc_slot_t *slot, mc_card_items_t *out) {
+    const char *card = slot->path;
     DIR *cd = opendir(card);
     struct dirent *ue;
     while (cd && (ue = readdir(cd))) {
         if (!id_ok(ue->d_name, 16)) continue;
         char udir[MC_PATH];
-        snprintf(udir, sizeof(udir), "%s/%s", card, ue->d_name);
+        if (snprintf(udir, sizeof(udir), "%s/%.15s", card, ue->d_name) >= (int)sizeof(udir)) continue;
         struct stat ust;
         if (stat(udir, &ust) < 0 || !S_ISDIR(ust.st_mode)) continue;
-        if (profile_n < 32) {
-            snprintf(profiles[profile_n][0], 64, "%s", ue->d_name);
-            read_profile(card, ue->d_name, profiles[profile_n][1], 64);
-            profile_n++;
-        }
+        char profile[64];
+        read_profile(card, ue->d_name, profile, sizeof(profile));
         DIR *ud = opendir(udir);
         struct dirent *te;
         while (ud && (te = readdir(ud))) {
             if (!id_ok(te->d_name, 32)) continue;
             char tdir[MC_PATH];
-            if (snprintf(tdir, sizeof(tdir), "%s/%s", udir, te->d_name) >= (int)sizeof(tdir)) continue;
+            if (snprintf(tdir, sizeof(tdir), "%s/%.31s", udir, te->d_name) >= (int)sizeof(tdir)) continue;
             DIR *td = opendir(tdir);
             if (!td) continue;
             struct dirent *se;
             while ((se = readdir(td))) {
                 if (!component_ok(se->d_name, 128) || is_card_private(se->d_name)) continue;
-                char path[MC_PATH], extra[MC_PATH];
-                if (snprintf(path, sizeof(path), "%s/%s", tdir, se->d_name) >= (int)sizeof(path) - 16)
+                char path[MC_PATH], extra[MC_PATH + 16];
+                if (snprintf(path, sizeof(path), "%s/%.127s", tdir, se->d_name) >= (int)sizeof(path) - 16)
                     continue;
                 struct stat st;
                 if (stat(path, &st) < 0) continue;
@@ -1606,17 +1730,20 @@ static char *http_card(void) {
                 } else if (!S_ISREG(st.st_mode)) {
                     continue;
                 }
-                if (n >= cap) {
-                    cap = cap ? cap * 2 : 64;
-                    mc_card_item_t *p = realloc(items, (size_t)cap * sizeof(*p));
+                if (out->n >= out->cap) {
+                    int cap = out->cap ? out->cap * 2 : 64;
+                    mc_card_item_t *p = realloc(out->v, (size_t)cap * sizeof(*p));
                     if (!p) break;
-                    items = p;
+                    out->v = p;
+                    out->cap = cap;
                 }
-                mc_card_item_t *it = &items[n++];
+                mc_card_item_t *it = &out->v[out->n++];
                 memset(it, 0, sizeof(*it));
-                snprintf(it->uid, sizeof(it->uid), "%s", ue->d_name);
-                snprintf(it->title, sizeof(it->title), "%s", te->d_name);
-                snprintf(it->name, sizeof(it->name), "%s", se->d_name);
+                it->usb = slot->usb;
+                snprintf(it->uid, sizeof(it->uid), "%.15s", ue->d_name);
+                snprintf(it->title, sizeof(it->title), "%.31s", te->d_name);
+                snprintf(it->name, sizeof(it->name), "%.127s", se->d_name);
+                snprintf(it->profile, sizeof(it->profile), "%s", profile);
                 it->folder = folder;
                 it->size = folder ? tree_size(path, 0) : (uint64_t)st.st_size;
                 it->mtime = (int64_t)st.st_mtime;
@@ -1630,25 +1757,42 @@ static char *http_card(void) {
         if (ud) closedir(ud);
     }
     if (cd) closedir(cd);
+}
 
-    sb_put(&sb, "{\"present\":true,\"path\":");
-    sb_str(&sb, card);
-    sb_put(&sb, ",\"saves\":[");
+/* usb=N limits the list to one card. */
+static char *http_card(const char *url) {
+    char arg[8];
+    int only = mc_url_param(url, "usb", arg, sizeof(arg)) && arg[0] ? atoi(arg) : -1;
+    mc_slot_t slots[MC_MAX_USB];
+    int slot_n = cards_snapshot(slots);
+    sb_t sb = {0};
+
+    mc_card_items_t items = {0};
+    for (int k = 0; k < slot_n; k++)
+        if (only < 0 || only == slots[k].usb) scan_card(&slots[k], &items);
+
+    sb_printf(&sb, "{\"present\":%s,\"cards\":[", slot_n ? "true" : "false");
+    for (int k = 0; k < slot_n; k++) {
+        sb_printf(&sb, "%s{\"usb\":%d,\"label\":", k ? "," : "", slots[k].usb);
+        sb_str(&sb, slots[k].label);
+        sb_put(&sb, ",\"path\":");
+        sb_str(&sb, slots[k].path);
+        sb_put(&sb, "}");
+    }
+    sb_put(&sb, "],\"saves\":[");
     pthread_mutex_lock(&g_st);
-    for (int i = 0; i < n; i++) {
-        mc_card_item_t *it = &items[i];
-        mc_index_t *ix = index_find(it->uid, it->title, it->name);
+    for (int i = 0; i < items.n; i++) {
+        mc_card_item_t *it = &items.v[i];
+        mc_card_t *c = &g_cards[it->usb];
+        mc_index_t *ix = c->present ? index_find(c, it->uid, it->title, it->name) : NULL;
         char id[192];
         snprintf(id, sizeof(id), "%s/%s/%s", it->uid, it->title, it->name);
-        const char *profile = "";
-        for (int p = 0; p < profile_n; p++)
-            if (!strcmp(profiles[p][0], it->uid)) profile = profiles[p][1];
-        sb_put(&sb, i ? ",{\"id\":" : "{\"id\":");
+        sb_printf(&sb, "%s{\"usb\":%d,\"id\":", i ? "," : "", it->usb);
         sb_str(&sb, id);
         sb_put(&sb, ",\"uid\":");
         sb_str(&sb, it->uid);
         sb_put(&sb, ",\"user_name\":");
-        sb_str(&sb, profile);
+        sb_str(&sb, it->profile);
         sb_put(&sb, ",\"title_id\":");
         sb_str(&sb, it->title);
         sb_put(&sb, ",\"title_name\":");
@@ -1668,7 +1812,7 @@ static char *http_card(void) {
     }
     pthread_mutex_unlock(&g_st);
     sb_put(&sb, "]}");
-    free(items);
+    free(items.v);
     return sb_done(&sb);
 }
 
@@ -1678,21 +1822,22 @@ static char *http_console(void) {
     pthread_mutex_lock(&g_st);
     mc_config_t cfg = g_cfg;
     pthread_mutex_unlock(&g_st);
-    char card[MC_PATH];
-    card_get(card, sizeof(card));
+    mc_slot_t slots[MC_MAX_USB];
+    int slot_n = cards_snapshot(slots);
 
     mc_save_list_t list = {0};
     scan_console(&list, cfg.include_system_backups);
 
     /* Callbacks and drive stats first, state under the lock afterwards. */
     char (*names)[96] = calloc((size_t)list.n + 1, 96);
-    char *on_card = calloc((size_t)list.n + 1, 1);
+    char *on_card = calloc((size_t)list.n * MC_MAX_USB + 1, 1); /* [save][usb] */
     char users[32][2][64];
     int user_n = 0;
     for (int i = 0; i < list.n; i++) {
         mc_save_t *s = &list.v[i];
         if (names && g_env.title_name) g_env.title_name(s->title, names[i], 96);
-        if (on_card && card[0]) on_card[i] = (char)card_file_exists(card, s);
+        for (int k = 0; on_card && k < slot_n; k++)
+            on_card[i * MC_MAX_USB + slots[k].usb] = (char)card_file_exists(slots[k].path, s);
         int known = 0;
         for (int u = 0; u < user_n; u++)
             if (!strcmp(users[u][0], s->uid)) known = 1;
@@ -1705,12 +1850,25 @@ static char *http_console(void) {
     }
 
     sb_t sb = {0};
-    sb_printf(&sb, "{\"card\":%s,\"saves\":[", card[0] ? "true" : "false");
+    sb_printf(&sb, "{\"card\":%s,\"saves\":[", slot_n ? "true" : "false");
     pthread_mutex_lock(&g_st);
     for (int i = 0; i < list.n; i++) {
         mc_save_t *s = &list.v[i];
-        mc_index_t *ix = index_find(s->uid, s->title, s->name);
-        int st = card[0] ? classify(s, ix, on_card ? on_card[i] : 0) : MC_NO_CARD;
+        /* The overall state is that of the card that is furthest behind. */
+        int worst = slot_n ? MC_SYNCED : MC_NO_CARD;
+        int64_t backed_at = 0;
+        mc_index_t *any_ix = NULL;
+        sb_t per = {0};
+        for (int k = 0; k < slot_n; k++) {
+            mc_card_t *c = &g_cards[slots[k].usb];
+            mc_index_t *ix = c->present ? index_find(c, s->uid, s->title, s->name) : NULL;
+            int st = classify(s, ix, on_card ? on_card[i * MC_MAX_USB + slots[k].usb] : 0);
+            if (st > worst) worst = st;
+            if (ix && !any_ix) any_ix = ix;
+            if (ix && (!backed_at || ix->backed_at < backed_at)) backed_at = ix->backed_at;
+            sb_printf(&per, "%s{\"usb\":%d,\"state\":\"%s\",\"backed_at\":%lld}", k ? "," : "",
+                      slots[k].usb, state_name(st), (long long)(ix ? ix->backed_at : 0));
+        }
         const char *user = s->uid;
         for (int u = 0; u < user_n; u++)
             if (!strcmp(users[u][0], s->uid) && users[u][1][0]) user = users[u][1];
@@ -1721,17 +1879,21 @@ static char *http_console(void) {
         sb_put(&sb, ",\"title_id\":");
         sb_str(&sb, s->title);
         sb_put(&sb, ",\"title_name\":");
-        sb_str(&sb, names && names[i][0] ? names[i] : ix ? ix->title_name : "");
+        sb_str(&sb, names && names[i][0] ? names[i] : any_ix ? any_ix->title_name : "");
         sb_put(&sb, ",\"save\":");
         sb_str(&sb, s->name);
         sb_put(&sb, ",\"main_title\":");
-        sb_str(&sb, ix ? ix->main_title : "");
+        sb_str(&sb, any_ix ? any_ix->main_title : "");
         sb_put(&sb, ",\"sub_title\":");
-        sb_str(&sb, ix ? ix->sub_title : "");
+        sb_str(&sb, any_ix ? any_ix->sub_title : "");
         sb_printf(&sb,
-                  ",\"type\":\"%s\",\"size\":%llu,\"mtime\":%lld,\"state\":\"%s\",\"backed_at\":%lld}",
+                  ",\"type\":\"%s\",\"size\":%llu,\"mtime\":%lld,\"state\":\"%s\",\"backed_at\":%lld,"
+                  "\"cards\":[",
                   s->is_ps4 ? "ps4" : "ps5", (unsigned long long)s->size, (long long)s->mtime,
-                  state_name(st), (long long)(ix ? ix->backed_at : 0));
+                  state_name(worst), (long long)backed_at);
+        if (per.p) sb_put(&sb, per.p);
+        free(per.p);
+        sb_put(&sb, "]}");
     }
     pthread_mutex_unlock(&g_st);
     sb_put(&sb, "]}");
@@ -1743,6 +1905,14 @@ static char *http_console(void) {
 
 /* ── HTTP: actions ──────────────────────────────────────────────── */
 
+/* usb=N from the query, -1 when absent, -2 when it is not a port number. */
+static int usb_param(const char *url) {
+    char arg[8];
+    if (!mc_url_param(url, "usb", arg, sizeof(arg)) || !arg[0]) return -1;
+    if (arg[1] || arg[0] < '0' || arg[0] >= '0' + MC_MAX_USB) return -2;
+    return arg[0] - '0';
+}
+
 static char *http_backup(const char *url) {
     mc_request_t r;
     memset(&r, 0, sizeof(r));
@@ -1751,23 +1921,20 @@ static char *http_backup(const char *url) {
     mc_url_param(url, "title", r.title, sizeof(r.title));
     mc_url_param(url, "save", r.name, sizeof(r.name));
     mc_url_param(url, "all", all, sizeof(all));
+    r.usb = usb_param(url);
     if ((r.uid[0] && !id_ok(r.uid, sizeof(r.uid))) || (r.title[0] && !id_ok(r.title, sizeof(r.title))) ||
-        (r.name[0] && !component_ok(r.name, sizeof(r.name))))
+        (r.name[0] && !component_ok(r.name, sizeof(r.name))) || r.usb == -2)
         return json_error("Invalid save reference");
     if (!r.uid[0] && !r.title[0] && !r.name[0] && strcmp(all, "1") != 0)
         return json_error("Say which save to back up, or pass all=1");
-    char card[MC_PATH];
-    card_get(card, sizeof(card));
-    if (!card[0]) {
-        /* The drive may have been plugged in since the last pass. */
-        card_refresh();
-        card_get(card, sizeof(card));
-        if (!card[0]) return json_error("No USB drive is connected");
-    }
+    /* A drive may have been plugged in since the last pass. */
+    if (!cards_refresh()) return json_error("No USB drive is connected");
     pthread_mutex_lock(&g_st);
+    int known = r.usb < 0 || g_cards[r.usb].present;
     int full = g_queue_n >= (int)(sizeof(g_queue) / sizeof(g_queue[0]));
-    if (!full) g_queue[g_queue_n++] = r;
+    if (known && !full) g_queue[g_queue_n++] = r;
     pthread_mutex_unlock(&g_st);
+    if (!known) return json_error("usb%d is not a memory card", r.usb);
     if (full) return json_error("Too many backups queued, try again in a moment");
     mc_wake();
     return strdup("{\"ok\":true,\"queued\":true}");
@@ -1789,20 +1956,37 @@ static int split_id(const char *id, char *uid, char *title, char *name) {
     return 0;
 }
 
-static void rmdir_if_empty(const char *path) {
-    rmdir(path); /* fails harmlessly when something is still inside */
+/* The card a save reference points at: the one asked for, or the first card
+ * that has it. suffix is appended to the save name when looking (".prev"). */
+static int pick_card(int usb, const char *uid, const char *title, const char *name,
+                     const char *suffix, mc_slot_t *out) {
+    mc_slot_t slots[MC_MAX_USB];
+    int slot_n = cards_snapshot(slots);
+    for (int k = 0; k < slot_n; k++) {
+        if (usb >= 0 && slots[k].usb != usb) continue;
+        char path[MC_PATH + 256];
+        snprintf(path, sizeof(path), "%s/%s/%s/%s%s", slots[k].path, uid, title, name, suffix);
+        if (usb >= 0 || exists(path)) {
+            *out = slots[k];
+            return 0;
+        }
+    }
+    return -1;
 }
 
 static char *http_delete(const char *url) {
     char id[256], uid[16], title[32], name[128];
-    if (!mc_url_param(url, "id", id, sizeof(id)) || split_id(id, uid, title, name) < 0)
+    int usb = usb_param(url);
+    if (!mc_url_param(url, "id", id, sizeof(id)) || split_id(id, uid, title, name) < 0 || usb == -2)
         return json_error("Invalid save reference");
-    char card[MC_PATH];
-    card_get(card, sizeof(card));
-    if (!card[0]) return json_error("No USB drive is connected");
-    char dir[MC_PATH], path[MC_PATH], extra[MC_PATH], bin[160];
-    snprintf(dir, sizeof(dir), "%s/%s/%s", card, uid, title);
-    if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path) - 16)
+    mc_slot_t slot;
+    if (pick_card(usb, uid, title, name, "", &slot) < 0) {
+        if (usb >= 0) return json_error("usb%d is not a memory card", usb);
+        return json_error("That save is not on a card");
+    }
+    char dir[MC_PATH], path[MC_PATH], extra[MC_PATH + 200], bin[160];
+    if (snprintf(dir, sizeof(dir), "%s/%s/%s", slot.path, uid, title) >= (int)sizeof(dir) ||
+        snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path) - 16)
         return json_error("Path is too long");
     if (!exists(path)) return json_error("That save is not on the card");
 
@@ -1821,16 +2005,78 @@ static char *http_delete(const char *url) {
         unlink(extra);
     }
     int gone = !exists(path);
-    rmdir_if_empty(dir);
+    rmdir(dir); /* fails harmlessly when something is still inside */
     pthread_mutex_lock(&g_st);
-    if (gone && !strcmp(g_index_card, card)) {
-        index_remove(uid, title, name);
-        index_save();
+    mc_card_t *c = &g_cards[slot.usb];
+    if (gone && c->present && !strcmp(c->path, slot.path)) {
+        index_remove(c, uid, title, name);
+        index_save(c);
     }
     pthread_mutex_unlock(&g_st);
     pthread_mutex_unlock(&g_io);
     if (!gone) return json_error("Could not delete the save from the drive");
-    event_add("delete", "removed %s from the card", id);
+    event_add("delete", "removed %s from usb%d", id, slot.usb);
+    return strdup("{\"ok\":true}");
+}
+
+/* POST /api/mc/card_init?usb=N: start using a connected drive as a memory card. */
+static char *http_card_init(const char *url) {
+    int usb = usb_param(url);
+    if (usb < 0) return json_error("Say which drive: usb=0..%d", MC_MAX_USB - 1);
+    char root[MC_PATH - 16], card[MC_PATH];
+    if (!usb_root(usb, root, sizeof(root))) return json_error("No drive is connected on usb%d", usb);
+    pthread_mutex_lock(&g_st);
+    int pin = g_cfg.usb;
+    pthread_mutex_unlock(&g_st);
+    if (pin >= 0 && pin != usb)
+        return json_error("The settings limit memory cards to usb%d. Change that first.", pin);
+    snprintf(card, sizeof(card), "%s/%s", root, MC_CARD_DIR);
+    pthread_mutex_lock(&g_io);
+    mkdir(card, 0777);
+    struct stat st;
+    int ok = stat(card, &st) == 0 && S_ISDIR(st.st_mode);
+    pthread_mutex_unlock(&g_io);
+    if (!ok) return json_error("Could not create /%s on usb%d (is the drive writable?)", MC_CARD_DIR, usb);
+    cards_refresh();
+    mc_wake();
+    return strdup("{\"ok\":true}");
+}
+
+/* POST /api/mc/label?usb=N&name=...: a name for the card, kept on the card itself. */
+static char *http_label(const char *url) {
+    int usb = usb_param(url);
+    char name[96], path[MC_PATH + 32];
+    mc_url_param(url, "name", name, sizeof(name));
+    label_clean(name);
+    if (strlen(name) > 40) {
+        /* Cut at a character boundary, not in the middle of a UTF-8 sequence. */
+        size_t len = 40;
+        while (len && ((unsigned char)name[len] & 0xC0) == 0x80) len--;
+        name[len] = 0;
+    }
+    mc_slot_t slot;
+    if (usb < 0 || pick_card(usb, "", "", "", "", &slot) < 0)
+        return json_error("That drive is not a memory card");
+    snprintf(path, sizeof(path), "%s/%s", slot.path, MC_LABEL_NAME);
+    pthread_mutex_lock(&g_io);
+    int ok = 1;
+    mkdirs(slot.path);
+    if (name[0]) {
+        FILE *f = fopen(path, "wb");
+        ok = f != NULL;
+        if (f) {
+            fputs(name, f);
+            ok = fclose(f) == 0;
+        }
+    } else {
+        unlink(path);
+    }
+    pthread_mutex_lock(&g_st);
+    mc_card_t *c = &g_cards[usb];
+    if (ok && c->present) snprintf(c->label, sizeof(c->label), "%s", name);
+    pthread_mutex_unlock(&g_st);
+    pthread_mutex_unlock(&g_io);
+    if (!ok) return json_error("Could not write the name to the drive");
     return strdup("{\"ok\":true}");
 }
 
@@ -1846,6 +2092,7 @@ static char *http_settings(const char *method, const char *body) {
         g_cfg = c;
         pthread_mutex_unlock(&g_st);
         event_add("info", "settings saved, auto backup %s", c.enabled ? "on" : "off");
+        cards_refresh();
         mc_wake();
         if (saved < 0) return json_error("Settings applied but could not be saved to disk");
     }
@@ -1866,11 +2113,13 @@ static int route_is(const char *url, const char *route) {
 char *mc_http(const char *method, const char *url, const char *body) {
     int get = !strcmp(method, "GET"), post = !strcmp(method, "POST");
     if (route_is(url, "/api/mc/status") && get) return http_status();
-    if (route_is(url, "/api/mc/card") && get) return http_card();
+    if (route_is(url, "/api/mc/card") && get) return http_card(url);
     if (route_is(url, "/api/mc/console") && get) return http_console();
     if (route_is(url, "/api/mc/settings") && (get || post)) return http_settings(method, body);
     if (route_is(url, "/api/mc/backup") && post) return http_backup(url);
     if (route_is(url, "/api/mc/delete") && post) return http_delete(url);
+    if (route_is(url, "/api/mc/card_init") && post) return http_card_init(url);
+    if (route_is(url, "/api/mc/label") && post) return http_label(url);
     if (route_is(url, "/api/mc/rescan") && post) {
         mc_wake();
         return strdup("{\"ok\":true}");
@@ -1887,23 +2136,28 @@ void mc_import_cleanup(void) {
     pthread_mutex_unlock(&g_io);
 }
 
-int mc_import_prepare(const char *id, int previous, char *staged, size_t staged_size,
+int mc_import_prepare(const char *id, int usb, int previous, char *staged, size_t staged_size,
                       char *title_id, size_t title_size, char *error, size_t error_size) {
     char uid[16], title[32], name[128];
-    if (split_id(id, uid, title, name) < 0) {
+    if (split_id(id, uid, title, name) < 0 || usb < -1 || usb >= MC_MAX_USB) {
         snprintf(error, error_size, "Invalid save reference");
         return -1;
     }
-    char card[MC_PATH];
-    card_get(card, sizeof(card));
-    if (!card[0]) {
+    mc_slot_t probe[MC_MAX_USB], slot;
+    if (!cards_snapshot(probe)) {
         snprintf(error, error_size, "No USB drive is connected");
         return -1;
     }
+    const char *suffix = previous ? MC_PREV_SUFFIX : "";
+    if (pick_card(usb, uid, title, name, suffix, &slot) < 0) {
+        if (usb >= 0) snprintf(error, error_size, "usb%d is not a memory card", usb);
+        else snprintf(error, error_size, previous ? "There is no previous copy of that save"
+                                                  : "That save is not on a card");
+        return -1;
+    }
     char dir[MC_PATH], src[MC_PATH], out_dir[MC_PATH];
-    snprintf(dir, sizeof(dir), "%s/%s/%s", card, uid, title);
-    if (snprintf(src, sizeof(src), "%s/%s%s", dir, name, previous ? MC_PREV_SUFFIX : "") >=
-        (int)sizeof(src)) {
+    if (snprintf(dir, sizeof(dir), "%s/%s/%s", slot.path, uid, title) >= (int)sizeof(dir) ||
+        snprintf(src, sizeof(src), "%s/%s%s", dir, name, suffix) >= (int)sizeof(src)) {
         snprintf(error, error_size, "Path is too long");
         return -1;
     }
@@ -1927,9 +2181,9 @@ int mc_import_prepare(const char *id, int previous, char *staged, size_t staged_
     int rc = copy_tree(src, staged, 0, err, sizeof(err));
     if (rc == 0 && S_ISREG(st.st_mode) && first_byte(src) == 0x01) {
         /* PS4 image: the importer needs the sealed key next to it. */
-        char bin[160], bin_src[MC_PATH], bin_dst[MC_PATH];
+        char bin[160], bin_src[MC_PATH + 200], bin_dst[MC_PATH + 200];
         ps4_bin_name(name, bin, sizeof(bin));
-        snprintf(bin_src, sizeof(bin_src), "%s/%s%s", dir, bin, previous ? MC_PREV_SUFFIX : "");
+        snprintf(bin_src, sizeof(bin_src), "%s/%s%s", dir, bin, suffix);
         if (previous && !exists(bin_src)) snprintf(bin_src, sizeof(bin_src), "%s/%s", dir, bin);
         snprintf(bin_dst, sizeof(bin_dst), "%s/%s", out_dir, bin);
         if (!exists(bin_src)) {
