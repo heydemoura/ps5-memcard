@@ -55,6 +55,9 @@ typedef struct mc_env {
 
 void mc_init(const mc_env_t *env);
 
+/* Look at the USB ports now. Returns how many memory cards are connected. */
+int mc_detect_cards(void);
+
 /* One watcher pass: find the card, run queued manual backups, mirror changed saves. */
 void mc_tick(void);
 /* Sleep until the next pass is due or somebody asks for one. -1 when stopping. */

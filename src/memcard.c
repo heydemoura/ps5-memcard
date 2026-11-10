@@ -1569,6 +1569,10 @@ void mc_note_resume(void) {
     mc_wake();
 }
 
+int mc_detect_cards(void) {
+    return cards_refresh();
+}
+
 void mc_init(const mc_env_t *env) {
     g_env = *env;
     config_load();

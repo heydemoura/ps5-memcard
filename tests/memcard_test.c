@@ -393,6 +393,8 @@ int main(void) {
     CHECK(strstr(card, "{\"usb\":1,\"id\":\"10000000/PPSA01234/sdimg_SAVE0001\""));
     CHECK(!strstr(call("GET", "/api/mc/card?usb=1", NULL), "{\"usb\":0,\"id\""));
 
+    CHECK(mc_detect_cards() == 2); /* what the start-up notification reports */
+
     printf("15. a blank third drive is left alone until it is made a card\n");
     mkdirs(P("usb2"));
     mkdirs(P("usb3"));
@@ -509,6 +511,7 @@ int main(void) {
 
     printf("21. no card at all\n");
     g_mounted[0] = g_mounted[1] = g_mounted[2] = g_mounted[3] = 0;
+    CHECK(mc_detect_cards() == 0);
     mc_tick();
     st = call("GET", "/api/mc/status", NULL);
     CHECK(strstr(st, "\"drives\":[]") && strstr(st, "\"present\":false,\"count\":0"));

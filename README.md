@@ -21,10 +21,22 @@ the look of [sendpayload.pages.dev](https://sendpayload.pages.dev).
 From then on it runs by itself until the console reboots. Sending the payload again
 replaces the running copy.
 
+Loading the payload also:
+
+- adds a **PS5 Memcard** shortcut to the **Media** tab of the home screen, which
+  opens the page in the console's own browser (`http://127.0.0.1:8083/`);
+- shows a notification, with the same icon, saying how many memory cards were
+  found: *PS5 Memcard / 2 Memory Cards detected*.
+
+![The notification](docs/console-toast.jpg)
+
+The shortcut stays on the Media tab after a reboot, but it only has a page to open
+while the payload is loaded. Delete it like any other app if you no longer want it.
+
 | Tab | What you get |
 | --- | --- |
-| **Drive tiles** | One per connected USB drive: its name, saves, free space, and a turning PS1-style memory card with the card's name on its label. Click a card to work with that card only, **✎** to name it, **Use as card** to start using a drive that is not a card yet. |
-| **On the card** | Every save on the selected card (or all cards), grouped by game, with the profile it came from. **Import** copies it into the profile you pick. **✕** deletes that copy. |
+| **Drive tiles** | One per connected USB drive: its name, saves, free space, and a turning PS1-style memory card with the card's name on its label. Click a card to work with that card only, the pencil to name it, **Use as card** to start using a drive that is not a card yet. |
+| **On the card** | Every save on the selected card (or all cards), grouped by game, with the profile it came from. **Import** copies it into the profile you pick. **×** deletes that copy. |
 | **On this console** | Every save on the console and whether it is on each card yet. **Back up** copies one now, **Back up game** / **Back up all** do the same in bulk, to the selected card or to all of them. |
 | **Status** | Counters, the running copy, an activity log, and the settings. |
 
@@ -98,6 +110,24 @@ Everything the page does, on port 8083:
 Garlic SaveMgr's own endpoints (`/api/saves`, `/api/log`, `/api/mount`, ...) are
 still there; its page, cloud/FTP watcher and UI are not used.
 
+## Home screen shortcut, icon and notifications
+
+- `assets/icon0.png` is the 3D card from `src/card3d.js` on the page's own
+  background (same colours and placement as the page, a little stronger so it
+  reads at icon size). `make icon` renders it again with `tools/make-icon.cjs`.
+- `src/homescreen.c` writes a title directory `/user/app/MEMC00001` with
+  `assets/param.json` (`applicationCategoryType` 65536 is a Media tab link,
+  `deeplinkUri` is the page) and registers it with the system, the way ftpsrv,
+  ps5-payload-manager and ps5-web-file-manager add theirs. It is only written
+  when missing or out of date.
+- Notifications go through `sceNotificationSend` with the `ToastTemplateA`
+  layout, which takes an icon from a file. The system UI reads it from
+  `/user/data/memcard/icon0.png` (it cannot see `/data`). Backup notifications use
+  the same toast. If the system refuses a toast, a plain text notification is
+  sent instead.
+- The page also works in the console's browser. That browser has no WebGL, so the
+  card icons are the flat drawing there.
+
 ## The card icons
 
 The memory card on each tile is a small three.js model built in code
@@ -134,7 +164,10 @@ On a PS5 with one USB exFAT drive: drive detection (empty ports are ignored),
 automatic mirror (card copy byte-identical to the console save), previous-copy
 rotation, manual backup, import of a decrypted folder, import of a mirrored image
 (the installed save mounts and holds its files), delete, naming the card,
-replacing a running instance, and the 3D icon with three.js served by the console.
+replacing a running instance, the 3D icon with three.js served by the console,
+the Media tab shortcut (registered, its hub page shows the icon and a Start
+button), the start-up notification with the icon, and the page in the console's
+own browser.
 
 Not yet exercised on hardware: two drives plugged in at once (covered by the host
 and browser tests only), PS4 saves, and moving a card between two consoles.
@@ -143,6 +176,8 @@ and browser tests only), PS4 saves, and moving a card between two consoles.
 
 - `src/memcard.c`, `src/memcard.h`: the memory card (watcher, index, staging, `/api/mc/*`).
 - `src/ui.html`, `src/card3d.js`: the page and its 3D card icons, embedded into the payload at build time.
+- `src/homescreen.c`, `assets/`: Media tab shortcut, its icon, and the toasts.
+- `tools/`: the icon renderer.
 - `vendor/`: three.js r160 (MIT), served by the payload.
 - `src/main.c`, `src/CMP/`: Garlic SaveMgr, with the glue marked `memcard glue`.
 - `tests/`: host test, simulator, browser tests.

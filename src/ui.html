@@ -18,16 +18,16 @@
 [hidden]{display:none!important}
 html,body{min-height:100%}
 body{background:var(--bg);color:var(--txt);font-family:var(--sans);overflow-x:hidden}
-body::before{content:"";position:fixed;inset:0;z-index:-2;
+body::before{content:"";position:fixed;top:0;right:0;bottom:0;left:0;z-index:-2;
   background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
-  background-size:44px 44px;mask-image:radial-gradient(ellipse at 50% 30%,#000 30%,transparent 75%)}
-body::after{content:"";position:fixed;inset:-20%;z-index:-1;pointer-events:none;
+  background-size:44px 44px;-webkit-mask-image:radial-gradient(ellipse at 50% 30%,#000 30%,transparent 75%);mask-image:radial-gradient(ellipse at 50% 30%,#000 30%,transparent 75%)}
+body::after{content:"";position:fixed;top:-20%;right:-20%;bottom:-20%;left:-20%;z-index:-1;pointer-events:none;
   background:radial-gradient(circle at 20% 15%,rgba(124,92,255,.28),transparent 40%),
              radial-gradient(circle at 85% 25%,rgba(57,255,159,.18),transparent 38%),
              radial-gradient(circle at 50% 100%,rgba(0,212,255,.15),transparent 45%);
   animation:drift 18s ease-in-out infinite alternate}
 @keyframes drift{to{transform:translate(3%,-2%) scale(1.05)}}
-.scan{position:fixed;inset:0;pointer-events:none;z-index:50;
+.scan{position:fixed;top:0;right:0;bottom:0;left:0;pointer-events:none;z-index:50;
   background:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px)}
 
 nav{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:20px 28px;max-width:1180px;margin:auto;font-family:var(--mono);font-size:13px}
@@ -49,8 +49,8 @@ h1 .grad{background:linear-gradient(90deg,var(--acc),var(--acc3) 50%,var(--acc2)
 
 main{max-width:1180px;margin:0 auto;padding:10px 20px 50px;display:grid;grid-template-columns:1.25fr .75fr;gap:20px;align-items:start}
 @media(max-width:900px){main{grid-template-columns:1fr}}
-.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px;backdrop-filter:blur(14px);min-width:0}
-.card::before{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;pointer-events:none;
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);min-width:0}
+.card::before{content:"";position:absolute;top:-1px;right:-1px;bottom:-1px;left:-1px;border-radius:inherit;padding:1px;pointer-events:none;
   background:linear-gradient(135deg,rgba(57,255,159,.55),transparent 35%,transparent 65%,rgba(124,92,255,.55));
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
 .ct{font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--mut);margin-bottom:18px;display:flex;justify-content:space-between;align-items:center}
@@ -76,7 +76,7 @@ button.slot,.slot[role=button]{cursor:pointer}
 .slot:focus-visible{outline:2px solid var(--acc3);outline-offset:2px}
 .slot.idle{border-style:dashed;padding-right:9px;flex-wrap:wrap} .slot.idle b{color:var(--mut)}
 .slot.idle .btn{flex:1 0 100%}
-.slot .ren{position:absolute;top:7px;right:7px;width:24px;height:24px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--mut);font-size:13px;cursor:pointer}
+.slot .ren{position:absolute;top:7px;right:7px;width:24px;height:24px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--mut);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
 .slot .ren:hover{color:var(--acc3);border-color:var(--line)}
 .tabs{display:flex;gap:6px;margin-bottom:14px}
 .tabs button{flex:1;font-family:var(--mono);font-size:12px;letter-spacing:.12em;color:var(--mut);background:transparent;border:1px solid var(--line);border-radius:10px;padding:10px 8px;cursor:pointer}
@@ -152,7 +152,7 @@ button.slot,.slot[role=button]{cursor:pointer}
 .note.bad{border-color:rgba(255,77,109,.45);background:rgba(255,77,109,.07);color:#ffb3c0}
 footer{text-align:center;color:var(--mut);font-family:var(--mono);font-size:12px;padding:0 20px 40px}
 
-.veil{position:fixed;inset:0;z-index:40;background:rgba(2,3,5,.72);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;padding:18px}
+.veil{position:fixed;top:0;right:0;bottom:0;left:0;z-index:40;background:rgba(2,3,5,.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;padding:18px}
 .veil.show{display:flex}
 .dlg{width:100%;max-width:480px;max-height:92vh;overflow:auto}
 .dlg h2{font-size:22px;letter-spacing:-.01em;margin-bottom:4px;word-break:break-word}
@@ -247,6 +247,8 @@ footer{text-align:center;color:var(--mut);font-family:var(--mono);font-size:12px
 </div>
 
 <script>
+// The console's own browser is an older WebKit: fill in what the page relies on.
+if(!Element.prototype.replaceChildren)Element.prototype.replaceChildren=function(...n){while(this.lastChild)this.removeChild(this.lastChild);this.append(...n)};
 const $=id=>document.getElementById(id);
 const el=(tag,cls,txt)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e};
 let tab=localStorage.mcTab==='console'?'console':'card', status=null, cardSaves=[], consoleSaves=[];
@@ -337,7 +339,8 @@ function renderSlots(){
       const t=el('div','slot'+(sel===d.usb||cs.length===1?' on':''));t.dataset.usb=d.usb;t.tabIndex=0;t.setAttribute('role','button');
       const state=d.waiting?`${d.waiting} waiting`:'in sync';
       tile(t,d.usb,d.label||'USB '+d.usb,'card',el('b',null,d.label||'USB '+d.usb),el('small',null,`usb${d.usb} · ${d.saves} save${d.saves===1?'':'s'} · ${state}`),el('small',null,`${fmt(d.free)} free of ${fmt(d.total)}`));
-      const ren=el('button','ren','✎');ren.title='Name this card';
+      const ren=el('button','ren');ren.title='Name this card';ren.setAttribute('aria-label','Name this card');
+        ren.innerHTML='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M11.6 1.6l2.8 2.8-8.2 8.2-3.6.8.8-3.6zM2 14.5h12v1H2z"/></svg>';
       ren.onclick=async e=>{e.stopPropagation();
         const name=prompt('Name for the card on usb'+d.usb+' (kept on the card itself)',d.label||'');if(name==null)return;
         try{await post(`/api/mc/label?usb=${d.usb}&name=${encodeURIComponent(name.trim())}`);await poll(true)}catch(err){note('rename: '+err.message,'e')}};
@@ -370,7 +373,7 @@ $('saveSet').onclick=async()=>{
   try{await post('/api/mc/settings',{enabled:$('cEnabled').checked,keep_previous:$('cPrev').checked,notify:$('cNotify').checked,
       include_system_backups:$('cSys').checked,all_drives:$('cAll').checked,poll_seconds:+$('cPoll').value||5,settle_seconds:+$('cSettle').value||0,
       min_interval_seconds:+$('cMin').value||0,usb:+$('cUsb').value});
-    settingsDirty=false;b.textContent='SAVED ✓';setTimeout(()=>b.textContent='SAVE SETTINGS',1500);await poll(true)}
+    settingsDirty=false;b.textContent='SAVED';setTimeout(()=>b.textContent='SAVE SETTINGS',1500);await poll(true)}
   catch(e){note('settings: '+e.message,'e')}
   b.disabled=false};
 
@@ -388,7 +391,7 @@ function gameIcon(titleId){
   return box}
 const saveLabel=s=>s.sub_title||s.main_title||s.save.replace(/^sdimg_/,'');
 const matches=(s,q)=>!q||[s.title_name,s.title_id,s.save,s.main_title,s.sub_title,s.user_name,s.uid].some(v=>v&&v.toLowerCase().includes(q));
-const STATE={synced:['ON CARD','ok','✓','on the card'],pending:['WAITING','wait','…','waiting to be copied'],missing:['NOT ON CARD','','–','not on the card'],
+const STATE={synced:['ON CARD','ok','●','on the card'],pending:['WAITING','wait','…','waiting to be copied'],missing:['NOT ON CARD','','–','not on the card'],
   card_newer:['CARD IS NEWER','newer','▲','the copy on the card is newer than this save; it is only overwritten if you back it up yourself'],no_card:['NO CARD','','','']};
 
 function renderList(){
@@ -427,9 +430,9 @@ function cardRow(s,showCard){
   i.append(sm);r.title=`usb${s.usb}: ${s.id}`;r.dataset.usb=s.usb;
   if(showCard)a.append(el('span','chip',cardName(s.usb)));
   const imp=el('button','btn pri sm','IMPORT ▸');imp.onclick=()=>openImport(s);
-  const del=el('button','btn sec sm danger','✕');del.title='Delete from this card';
+  const del=el('button','btn sec sm danger','×');del.title='Delete from this card';
   del.onclick=async()=>{
-    if(!del.classList.contains('arm')){del.classList.add('arm');del.textContent='DELETE?';setTimeout(()=>{del.classList.remove('arm');del.textContent='✕'},3000);return}
+    if(!del.classList.contains('arm')){del.classList.add('arm');del.textContent='DELETE?';setTimeout(()=>{del.classList.remove('arm');del.textContent='×'},3000);return}
     del.disabled=true;
     try{await post(`/api/mc/delete?usb=${s.usb}&id=${encodeURIComponent(s.id)}`);await refreshAll()}catch(e){note('delete: '+e.message,'e');del.disabled=false}};
   a.append(imp,del);r.append(i,a);return r}

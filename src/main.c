@@ -49,6 +49,7 @@
  #include "CMP/pfs_diagnostics.h"
  #include "CMP/instance_control.h"
  #include "memcard.h"
+ #include "homescreen.h"
 #ifndef GARLIC_VERSION
 #define GARLIC_VERSION "unversioned"
 #endif
@@ -4722,7 +4723,13 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
      pthread_mutex_unlock(&g_mtx);
  }
 
- static void mc_cb_notify(const char *message) { notify("%s", message); }
+ /* The core words its notifications "PS5 Memcard: ..."; on the console the
+  * name goes on the toast's title line and the rest under it. */
+ static void mc_cb_notify(const char *message) {
+     static const char prefix[] = "PS5 Memcard: ";
+     if (strncmp(message, prefix, sizeof(prefix) - 1) == 0) message += sizeof(prefix) - 1;
+     homescreen_toast("PS5 Memcard", "%s", message);
+ }
  static void mc_cb_log(const char *message) { logprintf("%s", message); }
  static int mc_cb_stopping(void) { return garlic_lifecycle_stopping(); }
 
@@ -4958,6 +4965,9 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
          return NULL;
      }
      if (strcmp(method, "GET") == 0 && (strcmp(url, "/") == 0 || strcmp(url, "/index.html") == 0)) {
+         /* memcard glue: note which browser opened the page (the console's own, or a PC/phone) */
+         char *ua = strcasestr(req, "\r\nUser-Agent:");
+         if (ua) logprintf("[memcard] page opened by%.*s\n", (int)strcspn(ua + 13, "\r\n"), ua + 13);
          http_send(sock, "200 OK", "text/html", (const char *)src_ui_html, src_ui_html_len);
          close(sock);
          return NULL;
@@ -9959,7 +9969,12 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
          printf("[memcard] sceNetInit OK (outbound FTP enabled)\n");
      else
          printf("[memcard] sceNetInit failed; cloud FTP uploads may not work\n");
-     notify("PS5 Memcard: port %d", PORT);
+     /* memcard glue: home screen shortcut, then say how many cards are plugged in */
+     homescreen_setup();
+     {
+         int cards = mc_detect_cards();
+         homescreen_toast("PS5 Memcard", "%d Memory Card%s detected", cards, cards == 1 ? "" : "s");
+     }
      start_auto_watcher();
 
      printf("Listening on port %d\n", PORT);

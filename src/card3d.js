@@ -1,6 +1,6 @@
 // Spinning PS1-style memory card icons, drawn with three.js.
 //
-// The page keeps window.mcIcons: Map key -> { canvas, text, mode, phase, angle } where
+// The page keeps window.mcIcons: Map key -> { canvas, text, mode, phase, angle, font } where
 // mode is 'card' (spins, text is written on its label), 'idle' (a drive that is
 // not a card: still) or 'all' (two cards). One shared WebGL renderer draws every
 // icon in turn and copies the result into the icon's own 2D canvas, so there is
@@ -96,7 +96,7 @@ function spaced(c, text, x, y, gap) { // centred text with letter spacing
   let at = x - w / 2; c.textAlign = 'left';
   for (const ch of text) { c.fillText(ch, at, y); at += c.measureText(ch).width + gap; }
 }
-function paintFace(text) {
+function paintFace(text, font) {
   const cv = document.createElement('canvas'); cv.width = W * PX; cv.height = L * PX;
   const c = cv.getContext('2d'), mm = v => v * PX, Y = v => (L - v) * PX; // card mm, y up from the grip end
   c.textBaseline = 'middle';
@@ -137,10 +137,11 @@ function paintFace(text) {
     c.save();
     c.translate(mm(W / 2), Y(ry + rh / 2)); c.rotate(-0.05);
     let size = mm(9);
-    const face = '"Segoe Print", "Bradley Hand", "Marker Felt", "Comic Sans MS", cursive';
-    c.font = `700 ${size}px ${face}`;
+    // font: optional [style, family] for the label (the icon generator picks its own)
+    const [style, family] = font || ['700', '"Segoe Print", "Bradley Hand", "Marker Felt", "Comic Sans MS", cursive'];
+    c.font = `${style} ${size}px ${family}`;
     const fit = mm(rw - 4) / c.measureText(text).width;
-    if (fit < 1) { size = Math.max(mm(2.6), size * fit); c.font = `700 ${size}px ${face}`; }
+    if (fit < 1) { size = Math.max(mm(2.6), size * fit); c.font = `${style} ${size}px ${family}`; }
     c.textAlign = 'center'; c.fillStyle = '#1b2f73';
     c.fillText(text, 0, 0, mm(rw - 3));
     c.restore();
@@ -195,13 +196,13 @@ if (renderer) {
   spin.add(a, b);
 
   const decals = new Map(); // label text -> texture
-  const decal = text => {
+  const decal = (text, font) => {
     if (!decals.has(text)) {
       if (decals.size > 24) { // forget labels no icon shows any more
         const used = new Set([...window.mcIcons.values()].map(e => e.mode === 'card' ? e.text || '' : ''));
         for (const [k, t] of decals) if (!used.has(k)) { t.dispose(); decals.delete(k); }
       }
-      decals.set(text, paintFace(text));
+      decals.set(text, paintFace(text, font));
     }
     return decals.get(text);
   };
@@ -219,7 +220,7 @@ if (renderer) {
     const turning = e.mode !== 'idle' && !still.matches;
     // e.angle pins the view (used by the tests); otherwise cards turn and idle drives stand still
     spin.rotation.y = e.angle != null ? e.angle : turning ? time * 0.0011 + (e.phase || 0) : -0.55;
-    a.userData.face.material.map = decal(e.mode === 'card' ? e.text || '' : '');
+    a.userData.face.material.map = decal(e.mode === 'card' ? e.text || '' : '', e.font);
     b.visible = two;
     if (two) {
       a.position.set(-8, 2, 7); a.rotation.z = 0.12;
