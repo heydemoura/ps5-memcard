@@ -69,6 +69,11 @@ while the payload is loaded. Delete it like any other app if you no longer want 
 - Nothing is written unless `/mnt/usbN` is a real mounted drive.
 - One console notification per pass, none over a running game.
 
+- **Turning automatic backup off:** press *Turn off auto backup* on the status line
+  (or untick *back up automatically* in Settings). Nothing is copied by itself until you
+  turn it back on. *Back up* on a save still works, and so does importing. The choice is
+  kept across restarts. Over HTTP: `POST /api/mc/settings` with `{"enabled":false}`.
+
 All of this is in Settings on the page, stored in `/data/memcard/config.json`.
 
 ## Card layout
