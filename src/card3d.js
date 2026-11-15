@@ -7,7 +7,8 @@
 // a single GL context however many cards are plugged in, and the tiles can be
 // rebuilt freely as long as they keep their canvas element.
 //
-// This file is inlined into ui.html at build time (see the Makefile).
+// This file is inlined into ui.html at build time (see the Makefile) and only started where
+// WebGL exists; elsewhere the page plays frames pre-rendered from it (tools/make-sprites.cjs).
 import * as THREE from './three.module.min.js?v=160';
 
 const W = 46, L = 63.5, H = 8.2;   // card size in mm
@@ -180,6 +181,8 @@ try {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' });
   renderer.setClearColor(0x000000, 0);
 } catch (e) { renderer = null; }
+// No usable WebGL after all: the page plays pre-rendered frames instead (see ui.html).
+if (!renderer && window.mcSpritesStart) window.mcSpritesStart();
 
 if (renderer) {
   const scene = new THREE.Scene();
@@ -209,6 +212,26 @@ if (renderer) {
   const still = matchMedia('(prefers-reduced-motion: reduce)');
   let rw = 0, rh = 0;
 
+  // Where the label recess of a card's top face lands in the picture just drawn: its corners
+  // (top-left, top-right, bottom-left, bottom-right, in canvas pixels) and how squarely it
+  // faces the camera (1 = straight on, <= 0 = turned away). tools/make-sprites.cjs keeps
+  // this per frame so pages without WebGL can write the card's name on pre-rendered frames.
+  const LABEL = { x: 3.6, y: 9.6, w: W - 7.2, h: 21.6 }; // mm, same recess as paintFace
+  const v3 = new THREE.Vector3(), n3 = new THREE.Vector3(), c3 = new THREE.Vector3();
+  function labelQuad(face, w, h) {
+    face.updateWorldMatrix(true, false);
+    const at = (x, y) => {
+      v3.set(x - W / 2, y - L / 2, 0).applyMatrix4(face.matrixWorld).project(camera);
+      return [+((v3.x + 1) / 2 * w).toFixed(2), +((1 - v3.y) / 2 * h).toFixed(2)];
+    };
+    const { x, y, w: lw, h: lh } = LABEL;
+    const q = [at(x, y + lh), at(x + lw, y + lh), at(x, y), at(x + lw, y)];
+    n3.set(0, 0, 1).transformDirection(face.matrixWorld);
+    face.getWorldPosition(c3);
+    const f = n3.dot(c3.subVectors(camera.position, c3).normalize());
+    return { q, f: +f.toFixed(3) };
+  }
+
   function draw(e, time) {
     const cv = e.canvas, w = cv.width, h = cv.height;
     if (!w || !h) return;
@@ -228,6 +251,7 @@ if (renderer) {
       b.userData.face.material.map = decal('');
     } else { a.position.set(0, 0, 0); a.rotation.z = 0; }
     renderer.render(scene, camera);
+    e.label = labelQuad(a.userData.face, w, h);
     const c = cv.getContext('2d');
     c.clearRect(0, 0, w, h);
     c.drawImage(renderer.domElement, 0, 0, w, h);

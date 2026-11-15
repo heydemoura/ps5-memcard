@@ -2,7 +2,7 @@
  * tree, so the whole thing can be driven from a browser without a PS5.
  *
  *   make sim            -> http://127.0.0.1:8083/
- *   build/sim --port N --ui build/ui.html [--three build/three.module.min.js.gz] [--root DIR] [--no-usb] [--empty]
+ *   build/sim --port N --ui build/ui.html [--three build/three.module.min.js.gz] [--cards assets/cards.webp] [--root DIR] [--no-usb] [--empty]
  *
  * Only the import is faked (the real one needs the console's save crypto): it
  * stages the card save exactly like the payload does, then drops the staged
@@ -28,7 +28,8 @@
 #include <time.h>
 #include <unistd.h>
 
-static char g_root[512], g_ui[512] = "build/ui.html", g_three[512] = "build/three.module.min.js.gz";
+static char g_root[512], g_ui[512] = "build/ui.html", g_three[512] = "build/three.module.min.js.gz",
+            g_cards[512] = "assets/cards.webp";
 static int g_mounted[MC_MAX_USB];
 static char g_running[32];
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -279,6 +280,20 @@ static void *client(void *arg) {
             reply(fd, "200 OK", "text/html", page, (size_t)len);
             free(page);
         }
+    } else if (!strcmp(method, "GET") && !strncmp(url, "/cards.webp", 11)) {
+        FILE *f = fopen(g_cards, "rb");
+        if (!f) {
+            reply(fd, "404 Not Found", "text/plain", "cards missing", 13);
+        } else {
+            fseek(f, 0, SEEK_END);
+            long len = ftell(f);
+            rewind(f);
+            char *img = malloc((size_t)len + 1);
+            len = (long)fread(img, 1, (size_t)len, f);
+            fclose(f);
+            reply(fd, "200 OK", "image/webp", img, (size_t)len);
+            free(img);
+        }
     } else if (!strcmp(method, "GET") && !strncmp(url, "/three.module.min.js", 20)) {
         FILE *f = fopen(g_three, "rb");
         if (!f) {
@@ -359,6 +374,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--ui") && i + 1 < argc) snprintf(g_ui, sizeof(g_ui), "%s", argv[++i]);
         else if (!strcmp(argv[i], "--three") && i + 1 < argc) snprintf(g_three, sizeof(g_three), "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--cards") && i + 1 < argc) snprintf(g_cards, sizeof(g_cards), "%s", argv[++i]);
         else if (!strcmp(argv[i], "--root") && i + 1 < argc) snprintf(g_root, sizeof(g_root), "%s", argv[++i]);
         else if (!strcmp(argv[i], "--no-usb")) usb = 0;
         else if (!strcmp(argv[i], "--empty")) empty = 1;

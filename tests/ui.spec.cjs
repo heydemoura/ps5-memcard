@@ -450,6 +450,74 @@ test('three.js is served by the console itself, compressed', async () => {
   expect((await r.text()).startsWith('/**\n * @license\n * Copyright 2010-2023 Three.js Authors')).toBe(true);
 });
 
+// The PS5's own browser has no WebGL at all: no WebGLRenderingContext, every getContext('webgl*') is null.
+const noWebGL = page => page.addInitScript(() => {
+  delete window.WebGLRenderingContext; delete window.WebGL2RenderingContext;
+  const get = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (t, ...a) { return /webgl/.test(t) ? null : get.call(this, t, ...a); };
+});
+
+test('without WebGL (the PS5 browser) the cards still turn, from pre-rendered frames, with their names', async ({ page }) => {
+  const urls = [];
+  page.on('request', r => urls.push(r.url()));
+  await noWebGL(page);
+  await startSim();
+  await synced(7);
+  await post('/sim/usb?n=1&on=1');
+  await post('/api/mc/card_init?usb=1');
+  await cardsInUse(2);
+  await post('/sim/usb?n=2&on=1'); // a drive that is not a card
+  await page.goto(base);
+  await page.waitForFunction(() => window.mcSprites && window.mcSprites.ready);
+  expect(await page.evaluate(() => window.mcIcons3d)).toBeUndefined();
+  expect(urls.some(u => u.includes('three.module'))).toBe(false); // three.js is not even fetched
+  await expect(page.locator('.slot canvas.mc3d')).toHaveCount(4);
+  for (const usb of ['all', 0, 1, 2]) {
+    await expect.poll(async () => (await iconState(page, usb)).painted, { timeout: 10000 }).toBeGreaterThan(300);
+    const a = await iconState(page, usb);
+    expect(a.painted).toBeLessThan(a.area);
+    await page.waitForTimeout(500);
+    if (usb === 2) expect((await iconState(page, usb)).sum).toBe(a.sum); // idle drive: dimmed, still
+    else expect((await iconState(page, usb)).sum).not.toBe(a.sum);    // cards turn
+  }
+  expect((await iconState(page, 2)).dim).toBe(true);
+  // the name is written on the label: same frame, with and without a name
+  await page.evaluate(() => { for (const k of [0, 1]) { const e = window.mcIcons.get(k); e.angle = 0.2; e.dirty = true; } });
+  await page.waitForTimeout(300);
+  const plain = await iconState(page, 0);
+  page.once('dialog', d => d.accept('Travel card'));
+  await page.locator('.slot[data-usb="1"] .ren').click();
+  await expect.poll(() => page.evaluate(() => window.mcIcons.get(1).text)).toBe('Travel card');
+  await page.waitForTimeout(300);
+  const named = await iconState(page, 1);
+  expect(named.sum).not.toBe(plain.sum);
+  await shot(page, 'icons-sprites.png');
+  if (SHOTS) await page.locator('#slots').screenshot({ path: path.join(SHOTS, 'icons-sprites-tiles.png') });
+});
+
+test('without WebGL and with reduced motion the cards stand still', async ({ page }) => {
+  await noWebGL(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await startSim();
+  await synced(7);
+  await page.goto(base);
+  await page.waitForFunction(() => window.mcSprites && window.mcSprites.ready);
+  await expect.poll(async () => (await iconState(page, 0)).painted, { timeout: 10000 }).toBeGreaterThan(300);
+  const a = await iconState(page, 0);
+  await page.waitForTimeout(700);
+  expect((await iconState(page, 0)).sum).toBe(a.sum);
+});
+
+test('the card frames are served by the console itself', async () => {
+  await startSim();
+  const r = await fetch(base + '/cards.webp?v=96');
+  expect(r.status).toBe(200);
+  expect(r.headers.get('content-type')).toBe('image/webp');
+  const b = Buffer.from(await r.arrayBuffer());
+  expect(b.subarray(0, 4).toString()).toBe('RIFF');
+  expect(b.subarray(8, 12).toString()).toBe('WEBP');
+});
+
 test('the page stays light: nothing from outside the console, no blur, no CSS animation but the status dot', async ({ page }) => {
   const urls = [];
   page.on('request', r => urls.push(r.url()));
@@ -459,7 +527,7 @@ test('the page stays light: nothing from outside the console, no blur, no CSS an
   await expect(page.locator('.game')).toHaveCount(5);
   await page.waitForTimeout(2500);
   expect(urls.filter(u => !u.startsWith(base))).toEqual([]); // no web fonts or CDNs
-  expect(urls.filter(u => !/\/($|\?|api\/|three\.module\.min\.js)/.test(u.slice(base.length)))).toEqual([]);
+  expect(urls.filter(u => !/\/($|\?|api\/|three\.module\.min\.js|cards\.webp)/.test(u.slice(base.length)))).toEqual([]);
   const css = await page.evaluate(() => ({
     blur: [...document.querySelectorAll('*')].filter(e => {
       const c = getComputedStyle(e);

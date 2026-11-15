@@ -4648,6 +4648,32 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
      if (send_all_fd(sock, hdr, (size_t)hlen) == 0) send_all_fd(sock, src_three_gz, len);
  }
 
+ /* The turning card as pre-rendered frames, for browsers without WebGL (the console's own). */
+ #ifndef CARDS_WEBP_PATH
+ #define CARDS_WEBP_PATH "assets/cards.webp"
+ #endif
+ __asm__(".pushsection .rodata\n"
+         ".global src_cards_webp\n"
+         "src_cards_webp:\n"
+         ".incbin \"" CARDS_WEBP_PATH "\"\n"
+         ".global src_cards_webp_end\n"
+         "src_cards_webp_end:\n"
+         ".popsection\n");
+ extern const unsigned char src_cards_webp[], src_cards_webp_end[];
+
+ static void memcard_send_cards(int sock) {
+     char hdr[512];
+     size_t len = (size_t)(src_cards_webp_end - src_cards_webp);
+     int hlen = snprintf(hdr, sizeof(hdr),
+         "HTTP/1.1 200 OK\r\n"
+         "Content-Type: image/webp\r\n"
+         "Content-Length: %zu\r\n"
+         "Cache-Control: public, max-age=31536000, immutable\r\n"
+         "Access-Control-Allow-Origin: *\r\n"
+         "Connection: close\r\n\r\n", len);
+     if (send_all_fd(sock, hdr, (size_t)hlen) == 0) send_all_fd(sock, src_cards_webp, len);
+ }
+
  /* ── memcard glue: PS5 side of mc_env_t ─────────────────────────── */
  static int mc_cb_is_mounted(const char *path) {
      /* A bare /mnt/usbN directory lives on the system partition; only a real
@@ -4969,6 +4995,13 @@ static int cloud_upload_zip_file(const cloud_config_t *cfg, const char *remote_d
          char *ua = strcasestr(req, "\r\nUser-Agent:");
          if (ua) logprintf("[memcard] page opened by%.*s\n", (int)strcspn(ua + 13, "\r\n"), ua + 13);
          http_send(sock, "200 OK", "text/html", (const char *)src_ui_html, src_ui_html_len);
+         close(sock);
+         return NULL;
+     }
+     /* memcard glue: card frames for the page, no lock needed */
+     if (strcmp(method, "GET") == 0 && strncmp(url, "/cards.webp", 11) == 0 &&
+         (url[11] == 0 || url[11] == '?')) {
+         memcard_send_cards(sock);
          close(sock);
          return NULL;
      }
