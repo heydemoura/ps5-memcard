@@ -35,7 +35,7 @@ while the payload is loaded. Delete it like any other app if you no longer want 
 
 | Tab | What you get |
 | --- | --- |
-| **Drive tiles** | One per connected USB drive: its name, saves, free space, and a small memory card icon. Click a card to work with that card only, the pencil to name it, **Use as card** to start using a drive that is not a card yet. |
+| **Drive tiles** | One per connected USB drive: its name, saves, free space, and a turning PS1-style memory card with the card's name on its label. Click a card to work with that card only, the pencil to name it, **Use as card** to start using a drive that is not a card yet. |
 | **On the card** | Every save on the selected card (or all cards), grouped by game, with the profile it came from. **Import** copies it into the profile you pick. **×** deletes that copy. |
 | **On this console** | Every save on the console and whether it is on each card yet. **Back up** copies one now, **Back up game** / **Back up all** do the same in bulk, to the selected card or to all of them. |
 | **Status** | Counters, the running copy, an activity log, and the settings. |
@@ -117,7 +117,7 @@ still there; its page, cloud/FTP watcher and UI are not used.
 
 ## Home screen shortcut, icon and notifications
 
-- `assets/icon0.png` is a 3D render of the card (`src/card3d.js`) on the page's own
+- `assets/icon0.png` is the 3D card from `src/card3d.js` on the page's own
   background (same colours and placement as the page, a little stronger so it
   reads at icon size). `make icon` renders it again with `tools/make-icon.cjs`.
 - `src/homescreen.c` writes a title directory `/user/app/MEMC00001` with
@@ -130,16 +130,21 @@ still there; its page, cloud/FTP watcher and UI are not used.
   `/user/data/memcard/icon0.png` (it cannot see `/data`). Backup notifications use
   the same toast. If the system refuses a toast, a plain text notification is
   sent instead.
-- The page also works in the console's browser.
+- The page also works in the console's browser. There the card icons show as the
+  flat drawing instead of the 3D model.
 
-## A light page
+## The card icons
 
-The page is one HTML file served by the payload and loads nothing else: no web
-fonts (the system's own fonts are used), no three.js, no WebGL. There are no
-blurred see-through panels, no moving background and no full-screen overlays. The
-only animation is the small "watching" dot, and while the page sits open its only
-work is the status check every 2 s (6 s in a background tab). The card icons are
-drawn once on a canvas and kept.
+The memory card on each tile is a small three.js model built in code
+(`src/card3d.js`): no model file, the print and the label are painted on a canvas.
+One WebGL context draws all of them. three.js itself (`vendor/`, MIT) is gzipped
+into the payload and served from the console, so the page needs no internet. With
+WebGL or the script unavailable the tiles show a flat drawing instead, and with
+"reduce motion" set the cards stand still.
+
+The rest of the page is kept light: it loads nothing from outside the console (system
+fonts, no web fonts), has no blurred see-through panels, no moving background and no
+full-screen overlays, and the only CSS animation is the small "watching" dot.
 
 ## Build
 
@@ -157,7 +162,7 @@ The memory card logic (`src/memcard.c`) is plain POSIX and runs on a PC.
 ```sh
 make test          # watcher / index / staging rules against a fake tree
 make sim           # the real page + the real core on http://127.0.0.1:8083/
-npm install && make build/sim build/ui.html && npx playwright test   # browser tests
+npm install && make build/sim build/ui.html build/three.module.min.js.gz && npx playwright test   # browser tests
 ```
 
 `make sim` fakes only the import step (that needs the console's save crypto).
@@ -168,7 +173,7 @@ On a PS5 with one USB exFAT drive: drive detection (empty ports are ignored),
 automatic mirror (card copy byte-identical to the console save), previous-copy
 rotation, manual backup, import of a decrypted folder, import of a mirrored image
 (the installed save mounts and holds its files), delete, naming the card,
-replacing a running instance,
+replacing a running instance, the 3D icon with three.js served by the console,
 the Media tab shortcut (registered, its hub page shows the icon and a Start
 button), the start-up notification with the icon, and the page in the console's
 own browser.
@@ -179,9 +184,10 @@ and browser tests only), PS4 saves, and moving a card between two consoles.
 ## Layout of the source
 
 - `src/memcard.c`, `src/memcard.h`: the memory card (watcher, index, staging, `/api/mc/*`).
-- `src/ui.html`: the page, embedded into the payload at build time.
+- `src/ui.html`, `src/card3d.js`: the page and its 3D card icons, embedded into the payload at build time.
 - `src/homescreen.c`, `assets/`: Media tab shortcut, its icon, and the toasts.
-- `tools/`, `src/card3d.js`, `vendor/`: the app icon renderer (`make icon`, on a PC only; three.js r160, MIT).
+- `tools/`: the icon renderer.
+- `vendor/`: three.js r160 (MIT), served by the payload.
 - `src/main.c`, `src/CMP/`: Garlic SaveMgr, with the glue marked `memcard glue`.
 - `tests/`: host test, simulator, browser tests.
 

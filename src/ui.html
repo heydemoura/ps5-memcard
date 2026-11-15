@@ -59,7 +59,7 @@ select option{background:#0b0e15}
 .slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(222px,1fr));gap:8px;margin-bottom:14px}
 .slot{position:relative;display:flex;gap:10px;align-items:center;text-align:left;font-family:var(--mono);color:var(--txt);background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:12px;padding:8px 30px 8px 9px;transition:.15s;min-width:0}
 .slot .st{min-width:0;flex:1}
-.slot canvas.mcicon{flex:0 0 52px;width:52px;height:68px;pointer-events:none}
+.slot canvas.mc3d{flex:0 0 52px;width:52px;height:68px;pointer-events:none}
 .slot canvas.dim{opacity:.4;filter:grayscale(1)}
 button.slot,.slot[role=button]{cursor:pointer}
 .slot b{display:block;font-size:13px;font-weight:800;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -249,12 +249,15 @@ let tab=localStorage.mcTab==='console'?'console':'card', status=null, cardSaves=
 let sel=localStorage.mcSel==null||localStorage.mcSel===''?-1:+localStorage.mcSel; // card filter: -1 = every card
 let lastSeen='', lastListLoad=0, settingsDirty=false, dlg=null, loadingLists=false;
 
-/* Memory card icons: one small canvas per drive, drawn again only when its mode changes. */
-const icons=new Map();
-function icon(key,mode){
-  let e=icons.get(key);
-  if(!e){const cv=el('canvas','mcicon'),k=Math.max(1,Math.min(2,window.devicePixelRatio||1));cv.width=Math.round(52*k);cv.height=Math.round(68*k);cv.setAttribute('aria-hidden','true');
-    e={canvas:cv};icons.set(key,e);flatIcon(e)}
+/* Memory card icons. Each keeps one canvas for as long as its drive is around; the
+ * three.js module below spins a 3D card into it. Until that is running (or if WebGL
+ * is not available) the canvas shows a flat drawing of the card. */
+window.mcIcons=new Map();
+function icon(key,text,mode){
+  let e=mcIcons.get(key);
+  if(!e){const cv=el('canvas','mc3d'),k=Math.max(2,Math.min(3,window.devicePixelRatio||1));cv.width=Math.round(52*k);cv.height=Math.round(68*k);cv.setAttribute('aria-hidden','true');
+    e={canvas:cv,phase:(typeof key==='number'?key:4.5)*0.9};mcIcons.set(key,e)}
+  if(e.text!==text||e.mode!==mode){e.text=text;e.mode=mode;e.dirty=true;if(!window.mcIcons3d)flatIcon(e)}
   e.canvas.classList.toggle('dim',mode==='idle');
   return e.canvas}
 function flatIcon(e){
@@ -324,7 +327,7 @@ function renderStatus(s){
 /* One tile per connected drive: pick a card, name it, or start using a drive as a card. */
 function renderSlots(){
   const box=$('slots'), ds=drives(), cs=cards(), live=new Set(); box.replaceChildren(); box.hidden=!ds.length;
-  const tile=(t,key,text,mode,...lines)=>{live.add(key);const st=el('div','st');st.append(...lines);t.append(icon(key,mode),st)};
+  const tile=(t,key,text,mode,...lines)=>{live.add(key);const st=el('div','st');st.append(...lines);t.append(icon(key,text,mode),st)};
   if(cs.length>1){const all=el('button','slot'+(sel<0?' on':''));all.dataset.usb='all';
     tile(all,'all','','all',el('b',null,'All cards'),el('small',null,`${cs.length} cards · ${cs.reduce((n,c)=>n+c.saves,0)} copies`));
     all.onclick=()=>pick(-1);box.append(all)}
@@ -348,7 +351,7 @@ function renderSlots(){
       use.onclick=async()=>{use.disabled=true;
         try{await post('/api/mc/card_init?usb='+d.usb);note('usb'+d.usb+' is now a memory card','p');await poll(true)}catch(err){note(err.message,'e');use.disabled=false}};
       t.append(use);box.append(t)}}
-  for(const [k,e] of [...icons])if(!live.has(k)&&!e.canvas.isConnected)icons.delete(k);
+  for(const [k,e] of [...mcIcons])if(!live.has(k)&&!e.canvas.isConnected)mcIcons.delete(k);
 }
 function pick(u){sel=u;localStorage.mcSel=u<0?'':u;if(status)renderStatus(status);renderList()}
 
@@ -504,6 +507,9 @@ async function poll(force){
     $('cardpill').classList.add('off');$('cardpill').replaceChildren('console ',el('b',null,'offline'))}}}
 const refreshAll=()=>poll(true);
 (async function loop(){await poll();setTimeout(loop,document.hidden?6000:2000)})();
+</script>
+<script type="module">
+/*__CARD3D__*/
 </script>
 </body>
 </html>

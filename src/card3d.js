@@ -234,11 +234,19 @@ if (renderer) {
     e.drawn3d = true;
   }
 
+  // Turning cards are redrawn at about 30 fps: a slow turn looks the same and costs half.
+  // New or changed icons are drawn on the next frame regardless.
+  let last = -1e9;
   function frame(time) {
     requestAnimationFrame(frame);
     if (document.hidden) return;
-    for (const e of window.mcIcons.values())
-      if (e.canvas.isConnected && (e.mode !== 'idle' && !still.matches && e.angle == null || !e.drawn3d || e.dirty)) { e.dirty = false; draw(e, time); }
+    const tick = time - last >= 32;
+    if (tick) last = time;
+    for (const e of window.mcIcons.values()) {
+      if (!e.canvas.isConnected) continue;
+      const moving = e.mode !== 'idle' && !still.matches && e.angle == null;
+      if ((moving && tick) || !e.drawn3d || e.dirty) { e.dirty = false; draw(e, time); }
+    }
   }
   renderer.domElement.addEventListener('webglcontextlost', ev => ev.preventDefault());
   renderer.domElement.addEventListener('webglcontextrestored', () => { for (const e of window.mcIcons.values()) e.drawn3d = false; });
