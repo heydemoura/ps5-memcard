@@ -6,13 +6,11 @@
 <title>MEM//CARD — PS5 saves on a USB memory card</title>
 <meta name="theme-color" content="#05060a">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='2' y='2' width='12' height='12' rx='3' fill='%2339ff9f'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#05060a; --panel:rgba(14,17,26,.72); --line:rgba(120,255,190,.14);
+  --bg:#05060a; --panel:rgba(12,15,23,.94); --line:rgba(120,255,190,.14);
   --txt:#e6edf3; --mut:#7d8796; --acc:#39ff9f; --acc2:#7c5cff; --acc3:#00d4ff; --err:#ff4d6d; --warn:#ffd166;
-  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace; --sans:'Space Grotesk',system-ui,sans-serif;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace; --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 [hidden]{display:none!important}
@@ -21,14 +19,10 @@ body{background:var(--bg);color:var(--txt);font-family:var(--sans);overflow-x:hi
 body::before{content:"";position:fixed;top:0;right:0;bottom:0;left:0;z-index:-2;
   background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
   background-size:44px 44px;-webkit-mask-image:radial-gradient(ellipse at 50% 30%,#000 30%,transparent 75%);mask-image:radial-gradient(ellipse at 50% 30%,#000 30%,transparent 75%)}
-body::after{content:"";position:fixed;top:-20%;right:-20%;bottom:-20%;left:-20%;z-index:-1;pointer-events:none;
+body::after{content:"";position:fixed;top:0;right:0;bottom:0;left:0;z-index:-1;pointer-events:none;
   background:radial-gradient(circle at 20% 15%,rgba(124,92,255,.28),transparent 40%),
              radial-gradient(circle at 85% 25%,rgba(57,255,159,.18),transparent 38%),
-             radial-gradient(circle at 50% 100%,rgba(0,212,255,.15),transparent 45%);
-  animation:drift 18s ease-in-out infinite alternate}
-@keyframes drift{to{transform:translate(3%,-2%) scale(1.05)}}
-.scan{position:fixed;top:0;right:0;bottom:0;left:0;pointer-events:none;z-index:50;
-  background:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px)}
+             radial-gradient(circle at 50% 100%,rgba(0,212,255,.15),transparent 45%)}
 
 nav{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:20px 28px;max-width:1180px;margin:auto;font-family:var(--mono);font-size:13px}
 .logo{display:flex;gap:10px;align-items:center;font-weight:800;letter-spacing:.08em}
@@ -39,17 +33,15 @@ nav{display:flex;align-items:center;justify-content:space-between;gap:12px;paddi
 header{text-align:center;padding:34px 20px 22px;max-width:900px;margin:auto}
 .tag{display:inline-block;font-family:var(--mono);font-size:12px;letter-spacing:.2em;color:var(--acc);
   border:1px solid rgba(57,255,159,.35);background:rgba(57,255,159,.06);padding:6px 14px;border-radius:999px;margin-bottom:20px}
-h1{font-size:clamp(34px,6.4vw,68px);line-height:.98;letter-spacing:-.03em;font-weight:700}
-h1 .grad{background:linear-gradient(90deg,var(--acc),var(--acc3) 50%,var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 0 22px rgba(57,255,159,.25))}
-.cursor{display:inline-block;width:.5em;height:.82em;background:var(--acc);vertical-align:-.06em;margin-left:6px;animation:blink 1s steps(1) infinite}
-@keyframes blink{50%{opacity:0}}
+h1{font-size:clamp(30px,5.4vw,58px);line-height:.98;letter-spacing:-.03em;font-weight:700}
+h1 .grad{background:linear-gradient(90deg,var(--acc),var(--acc3) 50%,var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.cursor{display:inline-block;width:.5em;height:.82em;background:var(--acc);vertical-align:-.06em;margin-left:6px}
 .sub{margin-top:16px;color:var(--mut);font-size:16px;line-height:1.5}
 .sub code{font-family:var(--mono);color:var(--txt);background:rgba(255,255,255,.06);padding:2px 6px;border-radius:5px}
 
 main{max-width:1180px;margin:0 auto;padding:10px 20px 50px;display:grid;grid-template-columns:1.25fr .75fr;gap:20px;align-items:start}
 @media(max-width:900px){main{grid-template-columns:1fr}}
-.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);min-width:0}
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px;min-width:0}
 .card::before{content:"";position:absolute;top:-1px;right:-1px;bottom:-1px;left:-1px;border-radius:inherit;padding:1px;pointer-events:none;
   background:linear-gradient(135deg,rgba(57,255,159,.55),transparent 35%,transparent 65%,rgba(124,92,255,.55));
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
@@ -67,7 +59,7 @@ select option{background:#0b0e15}
 .slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(222px,1fr));gap:8px;margin-bottom:14px}
 .slot{position:relative;display:flex;gap:10px;align-items:center;text-align:left;font-family:var(--mono);color:var(--txt);background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:12px;padding:8px 30px 8px 9px;transition:.15s;min-width:0}
 .slot .st{min-width:0;flex:1}
-.slot canvas.mc3d{flex:0 0 52px;width:52px;height:68px;pointer-events:none}
+.slot canvas.mcicon{flex:0 0 52px;width:52px;height:68px;pointer-events:none}
 .slot canvas.dim{opacity:.4;filter:grayscale(1)}
 button.slot,.slot[role=button]{cursor:pointer}
 .slot b{display:block;font-size:13px;font-weight:800;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -155,7 +147,7 @@ button.slot,.slot[role=button]{cursor:pointer}
 .note.bad{border-color:rgba(255,77,109,.45);background:rgba(255,77,109,.07);color:#ffb3c0}
 footer{text-align:center;color:var(--mut);font-family:var(--mono);font-size:12px;padding:0 20px 40px}
 
-.veil{position:fixed;top:0;right:0;bottom:0;left:0;z-index:40;background:rgba(2,3,5,.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;padding:18px}
+.veil{position:fixed;top:0;right:0;bottom:0;left:0;z-index:40;background:rgba(2,3,5,.86);display:none;align-items:center;justify-content:center;padding:18px}
 .veil.show{display:flex}
 .dlg{width:100%;max-width:480px;max-height:92vh;overflow:auto}
 .dlg h2{font-size:22px;letter-spacing:-.01em;margin-bottom:4px;word-break:break-word}
@@ -170,7 +162,6 @@ footer{text-align:center;color:var(--mut);font-family:var(--mono);font-size:12px
 </style>
 </head>
 <body>
-<div class="scan"></div>
 <nav>
   <div class="logo"><i></i>MEM//CARD</div>
   <div class="pill off" id="cardpill">card <b>looking…</b></div>
@@ -258,15 +249,12 @@ let tab=localStorage.mcTab==='console'?'console':'card', status=null, cardSaves=
 let sel=localStorage.mcSel==null||localStorage.mcSel===''?-1:+localStorage.mcSel; // card filter: -1 = every card
 let lastSeen='', lastListLoad=0, settingsDirty=false, dlg=null, loadingLists=false;
 
-/* Memory card icons. Each keeps one canvas for as long as its drive is around; the
- * three.js module below spins a 3D card into it. Until that is running (or if WebGL
- * is not available) the canvas shows a flat drawing of the card. */
-window.mcIcons=new Map();
-function icon(key,text,mode){
-  let e=mcIcons.get(key);
-  if(!e){const cv=el('canvas','mc3d'),k=Math.max(2,Math.min(3,window.devicePixelRatio||1));cv.width=Math.round(52*k);cv.height=Math.round(68*k);cv.setAttribute('aria-hidden','true');
-    e={canvas:cv,phase:(typeof key==='number'?key:4.5)*0.9};mcIcons.set(key,e)}
-  if(e.text!==text||e.mode!==mode){e.text=text;e.mode=mode;e.dirty=true;if(!window.mcIcons3d)flatIcon(e)}
+/* Memory card icons: one small canvas per drive, drawn again only when its mode changes. */
+const icons=new Map();
+function icon(key,mode){
+  let e=icons.get(key);
+  if(!e){const cv=el('canvas','mcicon'),k=Math.max(1,Math.min(2,window.devicePixelRatio||1));cv.width=Math.round(52*k);cv.height=Math.round(68*k);cv.setAttribute('aria-hidden','true');
+    e={canvas:cv};icons.set(key,e);flatIcon(e)}
   e.canvas.classList.toggle('dim',mode==='idle');
   return e.canvas}
 function flatIcon(e){
@@ -336,7 +324,7 @@ function renderStatus(s){
 /* One tile per connected drive: pick a card, name it, or start using a drive as a card. */
 function renderSlots(){
   const box=$('slots'), ds=drives(), cs=cards(), live=new Set(); box.replaceChildren(); box.hidden=!ds.length;
-  const tile=(t,key,text,mode,...lines)=>{live.add(key);const st=el('div','st');st.append(...lines);t.append(icon(key,text,mode),st)};
+  const tile=(t,key,text,mode,...lines)=>{live.add(key);const st=el('div','st');st.append(...lines);t.append(icon(key,mode),st)};
   if(cs.length>1){const all=el('button','slot'+(sel<0?' on':''));all.dataset.usb='all';
     tile(all,'all','','all',el('b',null,'All cards'),el('small',null,`${cs.length} cards · ${cs.reduce((n,c)=>n+c.saves,0)} copies`));
     all.onclick=()=>pick(-1);box.append(all)}
@@ -360,7 +348,7 @@ function renderSlots(){
       use.onclick=async()=>{use.disabled=true;
         try{await post('/api/mc/card_init?usb='+d.usb);note('usb'+d.usb+' is now a memory card','p');await poll(true)}catch(err){note(err.message,'e');use.disabled=false}};
       t.append(use);box.append(t)}}
-  for(const [k,e] of [...mcIcons])if(!live.has(k)&&!e.canvas.isConnected)mcIcons.delete(k);
+  for(const [k,e] of [...icons])if(!live.has(k)&&!e.canvas.isConnected)icons.delete(k);
 }
 function pick(u){sel=u;localStorage.mcSel=u<0?'':u;if(status)renderStatus(status);renderList()}
 
@@ -516,9 +504,6 @@ async function poll(force){
     $('cardpill').classList.add('off');$('cardpill').replaceChildren('console ',el('b',null,'offline'))}}}
 const refreshAll=()=>poll(true);
 (async function loop(){await poll();setTimeout(loop,document.hidden?6000:2000)})();
-</script>
-<script type="module">
-/*__CARD3D__*/
 </script>
 </body>
 </html>
