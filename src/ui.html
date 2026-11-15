@@ -257,7 +257,7 @@ function icon(key,text,mode){
   let e=mcIcons.get(key);
   if(!e){const cv=el('canvas','mc3d'),k=Math.max(2,Math.min(3,window.devicePixelRatio||1));cv.width=Math.round(52*k);cv.height=Math.round(68*k);cv.setAttribute('aria-hidden','true');
     e={canvas:cv,phase:(typeof key==='number'?key:4.5)*0.9};mcIcons.set(key,e)}
-  if(e.text!==text||e.mode!==mode){e.text=text;e.mode=mode;e.dirty=true;if(!window.mcIcons3d)flatIcon(e)}
+  if(e.text!==text||e.mode!==mode){e.text=text;e.mode=mode;e.dirty=true;if(!window.mcIcons3d&&!(window.mcSprites&&mcSprites.ready))flatIcon(e)}
   e.canvas.classList.toggle('dim',mode==='idle');
   return e.canvas}
 function flatIcon(e){
@@ -508,8 +508,60 @@ async function poll(force){
 const refreshAll=()=>poll(true);
 (async function loop(){await poll();setTimeout(loop,document.hidden?6000:2000)})();
 </script>
-<script type="module">
+<script type="text/plain" id="card3d">
 /*__CARD3D__*/
+</script>
+<script>
+/* The turning cards for browsers without WebGL (the PS5's own browser has none): frames of the
+ * same model rendered ahead of time (tools/make-sprites.cjs -> /cards.webp), played on each
+ * icon's 2D canvas, with the card's name written onto the label where it lands in that frame. */
+const CARDS=
+/*__CARDS_JSON__*/
+;
+window.mcSpritesStart=function(){
+  if(window.mcSprites)return;
+  const S=window.mcSprites={ready:false}, img=new Image(), still=matchMedia('(prefers-reduced-motion: reduce)');
+  const TAU=Math.PI*2, STILL=-0.55, LW=38.8, LH=21.6, PX=6, labels=new Map();
+  // keep in step with the label text in paintFace (src/card3d.js)
+  function labelCanvas(text){
+    if(labels.has(text))return labels.get(text);
+    const cv=document.createElement('canvas');cv.width=LW*PX;cv.height=LH*PX;
+    const c=cv.getContext('2d'),fam='"Segoe Print", "Bradley Hand", "Marker Felt", "Comic Sans MS", cursive';
+    let size=9*PX;c.font=`700 ${size}px ${fam}`;
+    const fit=(LW-4)*PX/c.measureText(text).width;
+    if(fit<1){size=Math.max(2.6*PX,size*fit);c.font=`700 ${size}px ${fam}`}
+    c.translate(cv.width/2,cv.height/2);c.rotate(-0.05);c.textAlign='center';c.textBaseline='middle';c.fillStyle='#1b2f73';
+    c.fillText(text,0,0,(LW-3)*PX);
+    labels.set(text,cv);return cv}
+  function draw(e,frame,label){
+    const cv=e.canvas,c=cv.getContext('2d'),k=cv.width/CARDS.w;
+    c.setTransform(1,0,0,1,0,0);c.globalAlpha=1;c.clearRect(0,0,cv.width,cv.height);
+    c.drawImage(img,(frame%CARDS.cols)*CARDS.w,Math.floor(frame/CARDS.cols)*CARDS.h,CARDS.w,CARDS.h,0,0,cv.width,cv.height);
+    if(!label||!e.text||label.f<0.08)return;
+    const l=labelCanvas(e.text),[tl,tr,bl]=label.q;
+    c.setTransform(k*(tr[0]-tl[0])/l.width,k*(tr[1]-tl[1])/l.width,k*(bl[0]-tl[0])/l.height,k*(bl[1]-tl[1])/l.height,k*tl[0],k*tl[1]);
+    c.globalAlpha=Math.min(1,label.f*1.15);c.drawImage(l,0,0);
+    c.setTransform(1,0,0,1,0,0);c.globalAlpha=1}
+  let last=-1e9;
+  function tick(time){
+    requestAnimationFrame(tick);
+    if(document.hidden)return;
+    const go=time-last>=32; if(go)last=time;
+    for(const e of mcIcons.values()){
+      if(!e.canvas.isConnected)continue;
+      const turning=e.mode!=='idle'&&!still.matches;
+      const angle=e.angle!=null?e.angle:turning?time*CARDS.speed+(e.phase||0):STILL;
+      let frame,label=null;
+      if(e.mode!=='all'&&angle===STILL){frame=CARDS.still;label=CARDS.stillLabel}
+      else{const i=Math.round((((angle%TAU)+TAU)%TAU)/TAU*CARDS.n)%CARDS.n;frame=e.mode==='all'?CARDS.n+i:i;if(e.mode!=='all')label=CARDS.card[i]}
+      if(!e.dirty&&(e.sf===frame&&e.st===e.text||(!go&&e.sf!=null)))continue;
+      e.dirty=false;e.sf=frame;e.st=e.text;draw(e,frame,e.mode==='card'?label:null)}}
+  img.onload=()=>{S.ready=true;for(const e of mcIcons.values())e.dirty=true;requestAnimationFrame(tick)};
+  img.src='/cards.webp?v='+CARDS.n;
+};
+/* Real 3D where there is WebGL; three.js is not even fetched where there is none. */
+if(window.WebGLRenderingContext){const m=document.createElement('script');m.type='module';m.textContent=document.getElementById('card3d').textContent;document.body.append(m)}
+else mcSpritesStart();
 </script>
 </body>
 </html>

@@ -130,17 +130,23 @@ still there; its page, cloud/FTP watcher and UI are not used.
   `/user/data/memcard/icon0.png` (it cannot see `/data`). Backup notifications use
   the same toast. If the system refuses a toast, a plain text notification is
   sent instead.
-- The page also works in the console's browser. There the card icons show as the
-  flat drawing instead of the 3D model.
+- The page also works in the console's browser, turning card icons included (see below).
 
 ## The card icons
 
 The memory card on each tile is a small three.js model built in code
 (`src/card3d.js`): no model file, the print and the label are painted on a canvas.
 One WebGL context draws all of them. three.js itself (`vendor/`, MIT) is gzipped
-into the payload and served from the console, so the page needs no internet. With
-WebGL or the script unavailable the tiles show a flat drawing instead, and with
-"reduce motion" set the cards stand still.
+into the payload and served from the console, so the page needs no internet.
+With "reduce motion" set the cards stand still.
+
+The PS5's own browser has no WebGL at all (no `WebGLRenderingContext`; checked on
+firmware 12.20). There the page plays the same model from frames rendered ahead of
+time: `assets/cards.webp` (96 frames per turn for one card and for two, plus a still
+one) and `assets/cards.json` (where the label lands in each frame, so the card's
+name is written onto it). three.js is not even downloaded then. `make sprites`
+renders both files again with `tools/make-sprites.cjs`; do that after changing
+`src/card3d.js`. If three.js cannot load at all, the tiles show a flat drawing.
 
 The rest of the page is kept light: it loads nothing from outside the console (system
 fonts, no web fonts), has no blurred see-through panels, no moving background and no
@@ -174,6 +180,7 @@ automatic mirror (card copy byte-identical to the console save), previous-copy
 rotation, manual backup, import of a decrypted folder, import of a mirrored image
 (the installed save mounts and holds its files), delete, naming the card,
 replacing a running instance, the 3D icon with three.js served by the console,
+the turning card frames in the console's own browser,
 the Media tab shortcut (registered, its hub page shows the icon and a Start
 button), the start-up notification with the icon, and the page in the console's
 own browser.
@@ -185,8 +192,8 @@ and browser tests only), PS4 saves, and moving a card between two consoles.
 
 - `src/memcard.c`, `src/memcard.h`: the memory card (watcher, index, staging, `/api/mc/*`).
 - `src/ui.html`, `src/card3d.js`: the page and its 3D card icons, embedded into the payload at build time.
-- `src/homescreen.c`, `assets/`: Media tab shortcut, its icon, and the toasts.
-- `tools/`: the icon renderer.
+- `src/homescreen.c`, `assets/`: Media tab shortcut, its icon, the toasts, and the card frames.
+- `tools/`: the icon and card frame renderers (`make icon`, `make sprites`).
 - `vendor/`: three.js r160 (MIT), served by the payload.
 - `src/main.c`, `src/CMP/`: Garlic SaveMgr, with the glue marked `memcard glue`.
 - `tests/`: host test, simulator, browser tests.

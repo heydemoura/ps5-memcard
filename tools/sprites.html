@@ -1,0 +1,12 @@
+<!doctype html>
+<!-- Renders the turning card frames for browsers without WebGL. Driven by tools/make-sprites.cjs. -->
+<meta charset="utf-8">
+<style>html,body{margin:0;background:transparent}</style>
+<canvas id="card" width="104" height="136"></canvas><canvas id="all" width="104" height="136"></canvas>
+<script>
+  window.mcIcons = new Map([
+    ['card', { canvas: document.getElementById('card'), text: '', mode: 'card', angle: 0 }],
+    ['all', { canvas: document.getElementById('all'), text: '', mode: 'all', angle: 0 }],
+  ]);
+</script>
+<script type="module" src="/card3d.js"></script>

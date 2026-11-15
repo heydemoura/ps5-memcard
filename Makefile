@@ -20,9 +20,11 @@ all: ps5-memcard.elf
 
 # The page and three.js are embedded with .incbin (see main.c), so no xxd is needed.
 # The 3D icon code is kept in its own file and inlined into the page here.
-build/ui.html: src/ui.html src/card3d.js Makefile
+# assets/cards.json (frame data for browsers without WebGL) is inlined the same way.
+build/ui.html: src/ui.html src/card3d.js assets/cards.json Makefile
 	@mkdir -p build
-	sed -e 's/__VERSION__/v$(VERSION)/g' -e '/__CARD3D__/{r src/card3d.js' -e 'd' -e '}' $< > $@
+	sed -e 's/__VERSION__/v$(VERSION)/g' -e '/__CARD3D__/{r src/card3d.js' -e 'd' -e '}' \
+	    -e '/__CARDS_JSON__/{r assets/cards.json' -e 'd' -e '}' $< > $@
 
 # three.js is served by the payload itself (the page must work without internet),
 # gzipped to keep the ELF small.
@@ -36,7 +38,7 @@ src/sqlite3.o: src/sqlite3.c
 src/miniz_tinfl.o: src/miniz_tinfl.c src/miniz_tinfl.h src/miniz_common.h
 	$(PS5_CC) -O2 -D_BSD_SOURCE -std=gnu11 -Isrc -I$(PS5_INCDIR) -w -c -o $@ $<
 
-ps5-memcard.elf: src/main.c src/memcard.c src/memcard.h src/homescreen.c src/homescreen.h assets/param.json assets/icon0.png build/ui.html build/three.module.min.js.gz src/sqlite3.o src/miniz_tinfl.o $(CMP_SRCS) $(wildcard src/CMP/*.h) $(wildcard src/CMP/internal/*.h)
+ps5-memcard.elf: src/main.c src/memcard.c src/memcard.h src/homescreen.c src/homescreen.h assets/param.json assets/icon0.png assets/cards.webp build/ui.html build/three.module.min.js.gz src/sqlite3.o src/miniz_tinfl.o $(CMP_SRCS) $(wildcard src/CMP/*.h) $(wildcard src/CMP/internal/*.h)
 	$(PS5_CC) $(CFLAGS) -DGARLIC_VERSION='"$(VERSION)"' -DUI_HTML_PATH='"build/ui.html"' $(LDFLAGS) \
 		-o $@ src/main.c src/memcard.c src/homescreen.c $(CMP_SRCS) src/sqlite3.o src/miniz_tinfl.o $(LIBS)
 
@@ -60,7 +62,12 @@ sim: build/sim build/ui.html build/three.module.min.js.gz
 icon:
 	node tools/make-icon.cjs
 
+# Re-render assets/cards.webp + cards.json, the turning card frames for browsers without
+# WebGL (the PS5's own browser). Run again after changing src/card3d.js.
+sprites:
+	node tools/make-sprites.cjs
+
 clean:
 	rm -rf build ps5-memcard.elf src/sqlite3.o src/miniz_tinfl.o
 
-.PHONY: all clean test sim icon
+.PHONY: all clean test sim icon sprites
