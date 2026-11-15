@@ -131,6 +131,9 @@ button.slot,.slot[role=button]{cursor:pointer}
 .watch.on i{background:var(--acc);box-shadow:0 0 10px var(--acc);animation:pulse 2s ease-in-out infinite}
 .watch.off i{background:var(--err)}
 .watch b{color:var(--txt);font-weight:600}
+.watch{flex-wrap:wrap}
+.watch span{flex:1 1 220px}
+.watch .btn{flex:0 0 auto;margin:-4px 0 0 auto}
 @keyframes pulse{50%{opacity:.35}}
 .bar{height:6px;border-radius:99px;background:rgba(255,255,255,.06);margin-top:14px;overflow:hidden}
 .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc2),var(--acc));box-shadow:0 0 12px var(--acc);transition:width .3s}
@@ -201,7 +204,7 @@ footer{text-align:center;color:var(--mut);font-family:var(--mono);font-size:12px
       <div class="stat"><b id="sSync">–</b><small>IN SYNC</small></div>
       <div class="stat"><b id="sWait">–</b><small>WAITING</small></div>
     </div>
-    <div class="watch" id="watch"><i></i><span id="watchText">connecting to the console…</span></div>
+    <div class="watch" id="watch"><i></i><span id="watchText">connecting to the console…</span><button class="btn sec sm" id="autoBtn" hidden></button></div>
     <div class="bar"><i id="bar"></i></div>
     <div class="job" id="job"></div>
     <div class="term" id="term"></div>
@@ -314,6 +317,9 @@ function renderStatus(s){
   else{wb.className='watch on';
     wt.append(el('b',null,'Watching '+w.console_saves+' saves'),(cs.length>1?' · '+cs.length+' cards':'')+' · checked '+ago(Math.max(0,s.now-w.last_sweep)));
     if(w.running_title)wt.append(' · playing ',el('b',null,w.running_name||w.running_title))}
+  const ab=$('autoBtn');ab.hidden=false;ab.disabled=false;
+  ab.textContent=w.enabled?'TURN OFF AUTO BACKUP':'TURN ON AUTO BACKUP';
+  ab.title=w.enabled?'Stop copying saves by itself; manual backups still work':'Copy changed saves to the card by itself again';
   const j=s.job;
   if(j.active){$('bar').style.width=(j.total?Math.min(100,j.done/j.total*100):5)+'%';
     $('job').textContent=`copying ${j.title} ${j.save} to ${cardName(j.usb)} · ${fmt(j.done)} of ${fmt(j.total)}`}
@@ -376,6 +382,12 @@ $('saveSet').onclick=async()=>{
     settingsDirty=false;b.textContent='SAVED';setTimeout(()=>b.textContent='SAVE SETTINGS',1500);await poll(true)}
   catch(e){note('settings: '+e.message,'e')}
   b.disabled=false};
+
+$('autoBtn').onclick=async()=>{
+  const b=$('autoBtn'),on=!status.watcher.enabled;b.disabled=true;
+  try{await post('/api/mc/settings',{enabled:on});$('cEnabled').checked=on;
+    note(on?'automatic backup is on':'automatic backup is off: saves are only copied when you ask','p');await poll(true)}
+  catch(e){note('settings: '+e.message,'e');b.disabled=false}};
 
 /* ── lists ── */
 async function loadLists(){

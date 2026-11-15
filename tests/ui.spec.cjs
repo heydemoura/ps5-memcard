@@ -84,6 +84,37 @@ test('a save that changes is picked up and copied without being asked', async ({
   await shot(page, 'console-desktop.png');
 });
 
+test('the status line switches automatic backup off and on', async ({ page }) => {
+  await startSim();
+  await fast();
+  await synced(7);
+  await page.goto(base);
+  const btn = page.locator('#autoBtn');
+  await expect(btn).toHaveText('TURN OFF AUTO BACKUP');
+  await btn.click();
+  await expect(page.locator('#watchText')).toContainText('Automatic backup is off');
+  await expect(btn).toHaveText('TURN ON AUTO BACKUP');
+  const cfg = () => JSON.parse(fs.readFileSync(path.join(root, 'data/config.json'), 'utf8'));
+  expect(cfg().enabled).toBe(false);
+  expect(cfg().settle_seconds).toBe(1); // other settings are left as they were
+  await page.click('#set summary');
+  await expect(page.locator('#cEnabled')).not.toBeChecked();
+
+  // A changed save stays on the console while it is off.
+  const save = home('1b2c3d4e/savedata_prospero/PPSA08338/sdimg_STELLAR0000');
+  fs.writeFileSync(save, Buffer.concat([Buffer.from([3]), Buffer.from('not mirrored')]));
+  await page.waitForTimeout(5000);
+  const st = await api('/api/mc/status');
+  expect(st.watcher.waiting).toBeGreaterThan(0);
+  await shot(page, 'auto-off.png');
+
+  await btn.click();
+  await expect(btn).toHaveText('TURN OFF AUTO BACKUP');
+  await expect(page.locator('#cEnabled')).toBeChecked();
+  expect(cfg().enabled).toBe(true);
+  await synced(7);
+});
+
 test('manual backup works with automatic backup switched off', async ({ page }) => {
   await startSim();
   await fast();
