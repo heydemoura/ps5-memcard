@@ -450,6 +450,27 @@ test('three.js is served by the console itself, compressed', async () => {
   expect((await r.text()).startsWith('/**\n * @license\n * Copyright 2010-2023 Three.js Authors')).toBe(true);
 });
 
+test('the page stays light: nothing from outside the console, no blur, no CSS animation but the status dot', async ({ page }) => {
+  const urls = [];
+  page.on('request', r => urls.push(r.url()));
+  await startSim();
+  await synced(7);
+  await page.goto(base);
+  await expect(page.locator('.game')).toHaveCount(5);
+  await page.waitForTimeout(2500);
+  expect(urls.filter(u => !u.startsWith(base))).toEqual([]); // no web fonts or CDNs
+  expect(urls.filter(u => !/\/($|\?|api\/|three\.module\.min\.js)/.test(u.slice(base.length)))).toEqual([]);
+  const css = await page.evaluate(() => ({
+    blur: [...document.querySelectorAll('*')].filter(e => {
+      const c = getComputedStyle(e);
+      return (c.backdropFilter && c.backdropFilter !== 'none') || (c.webkitBackdropFilter && c.webkitBackdropFilter !== 'none');
+    }).length,
+    anims: document.getAnimations().map(a => a.animationName || a.constructor.name),
+  }));
+  expect(css.blur).toBe(0);
+  expect(css.anims).toEqual(['pulse']); // the "watching" dot, opacity only
+});
+
 test('phone layout', async ({ page }) => {
   await startSim();
   await synced(7);

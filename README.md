@@ -142,6 +142,10 @@ into the payload and served from the console, so the page needs no internet. Wit
 WebGL or the script unavailable the tiles show a flat drawing instead, and with
 "reduce motion" set the cards stand still.
 
+The rest of the page is kept light: it loads nothing from outside the console (system
+fonts, no web fonts), has no blurred see-through panels, no moving background and no
+full-screen overlays, and the only CSS animation is the small "watching" dot.
+
 ## Build
 
 Needs the [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) and a host
